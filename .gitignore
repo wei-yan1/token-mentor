@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+.idea/
+.vscode/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.token-mentor/
+reports/
+config/sources.json
+.env
+

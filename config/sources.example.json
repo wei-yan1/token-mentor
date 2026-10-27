@@ -1,0 +1,43 @@
+{
+  "sources": [
+    {
+      "name": "aliyun-pricing",
+      "mode": "pricing",
+      "provider": "阿里云",
+      "endpoint": "https://YOUR_TRUSTED_ALIYUN_MCP_ENDPOINT/mcp",
+      "tool": "list_model_prices",
+      "api_key_env": "ALIYUN_MCP_TOKEN",
+      "arguments": {
+        "region": "cn-hangzhou",
+        "currency": "CNY",
+        "unit": "CNY/1M tokens"
+      }
+    },
+    {
+      "name": "deepseek-pricing",
+      "mode": "pricing",
+      "provider": "DeepSeek",
+      "endpoint": "https://YOUR_TRUSTED_DEEPSEEK_MCP_ENDPOINT/mcp",
+      "tool": "list_model_prices",
+      "api_key_env": "DEEPSEEK_MCP_TOKEN",
+      "arguments": {
+        "currency": "CNY",
+        "unit": "CNY/1M tokens"
+      }
+    },
+    {
+      "name": "tavily-discovery",
+      "mode": "discovery",
+      "endpoint": "https://YOUR_TRUSTED_TAVILY_MCP_ENDPOINT/mcp",
+      "tool": "tavily_search",
+      "api_key_env": "TAVILY_API_KEY",
+      "auth_header": "Authorization",
+      "auth_scheme": "Bearer",
+      "arguments": {
+        "query": "Laya 牛来 大模型 official API token price pricing 2026",
+        "search_depth": "advanced"
+      }
+    }
+  ]
+}
+

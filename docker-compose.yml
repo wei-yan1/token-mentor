@@ -1,0 +1,31 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      TOKEN_MENTOR_API_KEY: ${TOKEN_MENTOR_API_KEY:?Set a strong random API key in the environment}
+      TOKEN_MENTOR_DB: /data/catalog.sqlite3
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - token-mentor-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  collector:
+    build: .
+    restart: unless-stopped
+    command: ["token-mentor", "refresh", "--config", "/config/sources.json", "--db", "/data/catalog.sqlite3", "--loop", "--interval-seconds", "21600"]
+    environment:
+      ALIYUN_MCP_TOKEN: ${ALIYUN_MCP_TOKEN:-}
+      DEEPSEEK_MCP_TOKEN: ${DEEPSEEK_MCP_TOKEN:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+    volumes:
+      - token-mentor-data:/data
+      - ./config/sources.json:/config/sources.json:ro
+
+volumes:
+  token-mentor-data:

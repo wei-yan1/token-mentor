@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.py[cod]
+*.egg-info
+.token-mentor
+reports
+tests
+evals
+.env
+config/sources.json
+.idea

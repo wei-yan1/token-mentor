@@ -1,0 +1,46 @@
+{
+  "dataset": "token-mentor-small-v1",
+  "notice": "仅用于离线验证排序逻辑；价格和分数均为合成夹具，不是厂商报价或实测结果。",
+  "cases": [
+    {
+      "id": "translation-quality-first",
+      "intent": "中英日文档翻译与本地化",
+      "expected_task": "translation",
+      "input_tokens": 4000,
+      "output_tokens": 1200,
+      "weights": {"cost": 0.1, "quality": 0.75, "stability": 0.1, "speed": 0.05},
+      "expected_top_model": "translate-pro",
+      "models": [
+        {"provider":"Fixture","model":"translate-pro","input_price_per_million":8,"output_price_per_million":24,"price_unit":"CNY/1M tokens","source_url":"https://example.invalid/fixture/translate-pro","observed_at":"2026-10-27T00:00:00Z","capabilities":{"translation":0.98},"stability":96,"latency_ms":500},
+        {"provider":"Fixture","model":"translate-budget","input_price_per_million":0.5,"output_price_per_million":1.5,"price_unit":"CNY/1M tokens","source_url":"https://example.invalid/fixture/translate-budget","observed_at":"2026-10-27T00:00:00Z","capabilities":{"translation":0.68},"stability":90,"latency_ms":600}
+      ]
+    },
+    {
+      "id": "summary-budget-first",
+      "intent": "批量生成长文摘要和报告",
+      "expected_task": "summarization",
+      "input_tokens": 12000,
+      "output_tokens": 1500,
+      "weights": {"cost": 0.8, "quality": 0.2, "stability": 0, "speed": 0},
+      "expected_top_model": "summary-budget",
+      "models": [
+        {"provider":"Fixture","model":"summary-pro","input_price_per_million":10,"output_price_per_million":30,"price_unit":"CNY/1M tokens","source_url":"https://example.invalid/fixture/summary-pro","observed_at":"2026-10-27T00:00:00Z","capabilities":{"summarization":0.98}},
+        {"provider":"Fixture","model":"summary-budget","input_price_per_million":0.4,"output_price_per_million":1.2,"price_unit":"CNY/1M tokens","source_url":"https://example.invalid/fixture/summary-budget","observed_at":"2026-10-27T00:00:00Z","capabilities":{"summarization":0.8}}
+      ]
+    },
+    {
+      "id": "coding-stability-first",
+      "intent": "Python backend API coding and test generation",
+      "expected_task": "coding",
+      "input_tokens": 6000,
+      "output_tokens": 2000,
+      "weights": {"cost": 0.1, "quality": 0.25, "stability": 0.55, "speed": 0.1},
+      "expected_top_model": "coder-steady",
+      "models": [
+        {"provider":"Fixture","model":"coder-steady","input_price_per_million":5,"output_price_per_million":15,"price_unit":"CNY/1M tokens","source_url":"https://example.invalid/fixture/coder-steady","observed_at":"2026-10-27T00:00:00Z","capabilities":{"coding":0.9},"stability":99,"latency_ms":700},
+        {"provider":"Fixture","model":"coder-flaky","input_price_per_million":1,"output_price_per_million":3,"price_unit":"CNY/1M tokens","source_url":"https://example.invalid/fixture/coder-flaky","observed_at":"2026-10-27T00:00:00Z","capabilities":{"coding":0.91},"stability":65,"latency_ms":450}
+      ]
+    }
+  ]
+}
+
