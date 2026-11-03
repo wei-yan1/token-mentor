@@ -18,7 +18,7 @@ services:
   collector:
     build: .
     restart: unless-stopped
-    command: ["token-mentor", "refresh", "--config", "/config/sources.json", "--db", "/data/catalog.sqlite3", "--loop", "--interval-seconds", "21600"]
+    command: ["token-mentor", "refresh", "--config", "/config/sources.json", "--db", "/data/catalog.sqlite3", "--loop", "--interval-seconds", "86400", "--scope", "all"]
     environment:
       ALIYUN_MCP_TOKEN: ${ALIYUN_MCP_TOKEN:-}
       DEEPSEEK_MCP_TOKEN: ${DEEPSEEK_MCP_TOKEN:-}

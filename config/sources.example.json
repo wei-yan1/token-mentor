@@ -3,6 +3,7 @@
     {
       "name": "aliyun-pricing",
       "mode": "pricing",
+      "scope": "domestic",
       "provider": "阿里云",
       "endpoint": "https://YOUR_TRUSTED_ALIYUN_MCP_ENDPOINT/mcp",
       "tool": "list_model_prices",
@@ -11,11 +12,13 @@
         "region": "cn-hangzhou",
         "currency": "CNY",
         "unit": "CNY/1M tokens"
-      }
+      },
+      "enabled": false
     },
     {
       "name": "deepseek-pricing",
       "mode": "pricing",
+      "scope": "domestic",
       "provider": "DeepSeek",
       "endpoint": "https://YOUR_TRUSTED_DEEPSEEK_MCP_ENDPOINT/mcp",
       "tool": "list_model_prices",
@@ -23,21 +26,234 @@
       "arguments": {
         "currency": "CNY",
         "unit": "CNY/1M tokens"
-      }
+      },
+      "enabled": false
     },
     {
-      "name": "tavily-discovery",
+      "name": "tavily-market-research",
       "mode": "discovery",
-      "endpoint": "https://YOUR_TRUSTED_TAVILY_MCP_ENDPOINT/mcp",
+      "scope": "all",
+      "category": "news",
+      "query_argument": "query",
+      "query_templates": {
+        "pricing": "{provider} {aliases} official API pricing input output token price {domains}",
+        "model_news": "{provider} {aliases} new AI model release announcement {domains}",
+        "market_news": "AI large language model pricing launch news trending {watch_terms} {region} {date}",
+        "model_verification": "\"{model}\" {provider} official API pricing description strengths context window {domains}"
+      },
+      "endpoint": "https://api.tavily.com/search",
       "tool": "tavily_search",
       "api_key_env": "TAVILY_API_KEY",
       "auth_header": "Authorization",
       "auth_scheme": "Bearer",
       "arguments": {
-        "query": "Laya 牛来 大模型 official API token price pricing 2026",
-        "search_depth": "advanced"
-      }
+        "search_depth": "basic",
+        "max_results": 5,
+        "include_answer": false,
+        "include_raw_content": false,
+        "include_published_date": true
+      },
+      "transport": "tavily",
+      "max_model_queries": 100,
+      "watch_terms": [
+        "牛来",
+        "Ox Alpha"
+      ],
+      "enabled": true
+    }
+  ],
+  "targets": [
+    {
+      "provider": "阿里云",
+      "region": "domestic",
+      "aliases": [
+        "Alibaba Cloud",
+        "阿里云百炼",
+        "Qwen",
+        "通义千问"
+      ],
+      "official_domains": [
+        "aliyun.com",
+        "qwen.ai"
+      ]
+    },
+    {
+      "provider": "DeepSeek",
+      "region": "domestic",
+      "aliases": [
+        "深度求索"
+      ],
+      "official_domains": [
+        "deepseek.com"
+      ]
+    },
+    {
+      "provider": "智谱AI",
+      "region": "domestic",
+      "aliases": [
+        "Zhipu AI",
+        "Z.ai",
+        "GLM"
+      ],
+      "official_domains": [
+        "z.ai",
+        "bigmodel.cn"
+      ]
+    },
+    {
+      "provider": "月之暗面",
+      "region": "domestic",
+      "aliases": [
+        "Moonshot AI",
+        "Kimi"
+      ],
+      "official_domains": [
+        "moonshot.cn",
+        "kimi.com"
+      ]
+    },
+    {
+      "provider": "MiniMax",
+      "region": "domestic",
+      "aliases": [
+        "稀宇科技"
+      ],
+      "official_domains": [
+        "minimaxi.com"
+      ]
+    },
+    {
+      "provider": "百度智能云",
+      "region": "domestic",
+      "aliases": [
+        "Baidu",
+        "文心一言",
+        "ERNIE"
+      ],
+      "official_domains": [
+        "baidu.com",
+        "cloud.baidu.com"
+      ]
+    },
+    {
+      "provider": "腾讯云",
+      "region": "domestic",
+      "aliases": [
+        "Tencent Hunyuan",
+        "混元"
+      ],
+      "official_domains": [
+        "cloud.tencent.com"
+      ]
+    },
+    {
+      "provider": "字节跳动",
+      "region": "domestic",
+      "aliases": [
+        "ByteDance",
+        "火山引擎",
+        "豆包"
+      ],
+      "official_domains": [
+        "volcengine.com",
+        "doubao.com"
+      ]
+    },
+    {
+      "provider": "小米",
+      "region": "domestic",
+      "aliases": [
+        "Xiaomi MiMo"
+      ],
+      "official_domains": [
+        "xiaomi.com"
+      ]
+    },
+    {
+      "provider": "OpenAI",
+      "region": "foreign",
+      "aliases": [
+        "GPT",
+        "ChatGPT",
+        "Codex"
+      ],
+      "official_domains": [
+        "openai.com"
+      ]
+    },
+    {
+      "provider": "Anthropic",
+      "region": "foreign",
+      "aliases": [
+        "Claude"
+      ],
+      "official_domains": [
+        "anthropic.com"
+      ]
+    },
+    {
+      "provider": "Google",
+      "region": "foreign",
+      "aliases": [
+        "Gemini",
+        "DeepMind"
+      ],
+      "official_domains": [
+        "ai.google.dev",
+        "deepmind.google"
+      ]
+    },
+    {
+      "provider": "xAI",
+      "region": "foreign",
+      "aliases": [
+        "Grok"
+      ],
+      "official_domains": [
+        "x.ai"
+      ]
+    },
+    {
+      "provider": "Mistral AI",
+      "region": "foreign",
+      "aliases": [
+        "Mistral",
+        "Le Chat"
+      ],
+      "official_domains": [
+        "mistral.ai"
+      ]
+    },
+    {
+      "provider": "Meta",
+      "region": "foreign",
+      "aliases": [
+        "Llama"
+      ],
+      "official_domains": [
+        "ai.meta.com"
+      ]
+    },
+    {
+      "provider": "Cohere",
+      "region": "foreign",
+      "aliases": [
+        "Command"
+      ],
+      "official_domains": [
+        "cohere.com"
+      ]
+    },
+    {
+      "provider": "Amazon",
+      "region": "foreign",
+      "aliases": [
+        "AWS Bedrock",
+        "Nova"
+      ],
+      "official_domains": [
+        "aws.amazon.com"
+      ]
     }
   ]
 }
-

@@ -31,7 +31,7 @@ token-mentor recommend --repo . --intent "AI 项目成本与模型选型" --outp
 ## 功能
 
 - `recommend`：优先读取用户指定的项目用途，再读 README、Markdown、Python 和配置文件，生成能力画像、分任务模型排名、估算成本、数据库/缓存建议及 Markdown 报告。
-- `refresh`：连接 Streamable HTTP MCP 服务；`pricing` 模式只接受结构化、可溯源价格，`discovery` 模式将 Tavily 等搜索结果存入线索列表，不把搜索摘要当价格。
+- `refresh`：按国内/国外/全部范围运行市场巡检；支持结构化报价 MCP 和 Tavily Search API。每天检查厂商报价源、已收录模型和近期新闻。只有结构化、官方域名匹配的报价进入价格表；搜索结果进入待核验线索。默认循环间隔 24 小时。
 - 三个可组合的 Python agent：`MarketResearchAgent`（定时采集）、`ProjectAdvisorAgent`（项目/用途分析与选型）、`EvaluationAgent`（本地测评）。推荐决策当前是确定性、可审计规则；不依赖隐藏的 LLM 判断。
 - `import-prices`：导入手工核验或其他 MCP/ETL 整理的标准价格快照。
 - `api`：可选 FastAPI 多用户服务；项目描述通过 API 提交，不允许客户端指定服务端文件路径。推荐结果由共享 SQLite 缓存复用。
@@ -42,13 +42,18 @@ token-mentor recommend --repo . --intent "AI 项目成本与模型选型" --outp
 
 ```text
 token-mentor recommend [--repo PATH] [--intent TEXT] [--weights ...] [--input-tokens N] [--output-tokens N]
-token-mentor refresh [--config PATH] [--loop] [--interval-seconds N]
+token-mentor refresh [--config PATH] [--scope domestic|foreign|all] [--loop] [--interval-seconds N]
 token-mentor import-prices --file prices.json
 token-mentor import-benchmarks --file benchmarks.json
 token-mentor compare --task coding --benchmark-id coding-suite --benchmark-version 1 --protocol public-v1
 token-mentor workflow status RUN_ID
 token-mentor workflow resume RUN_ID
 token-mentor discoveries [--limit N]
+token-mentor targets [--scope domestic|foreign|all]
+token-mentor models [--scope domestic|foreign|all]
+token-mentor market-leads [--scope domestic|foreign|all]
+token-mentor market-checks [--limit N]
+token-mentor price-changes [--limit N]
 token-mentor feedback REPORT_ID --rating 1..5 [--note TEXT]
 token-mentor feedback-list [--limit N]
 token-mentor eval [--cases evals/cases.json]
@@ -121,3 +126,19 @@ python -m compileall -q src
 ## 六层代码组织
 
 业务实现位于 `context`（上下文）、`tools`（工具）、`orchestration`（编排）、`state`（状态记忆）、`observability`（测评可观测性）、`constraints`（约束策略）。原模块路径保留兼容导入；CLI/API 使用正式模块。目录责任、依赖规则和待实现能力见 [系统架构](docs/architecture.md)。参考 DeepSeek Harness 的可组合能力拆分，保持 Python 核心精简。
+
+## 国内外市场巡检
+
+配置文件中维护厂商和官方域名列表，当前示例覆盖国内与海外常见厂商，并把“牛来 / Ox Alpha”作为新闻热词搜索，不预设其厂商归属。可用 `refresh --scope domestic`、`--scope foreign` 或 `--scope all` 控制范围。Tavily 每轮按厂商搜官方价格/模型更新和新闻；也会逐条核验已入库模型。每次 refresh 对结构化价格源、厂商搜索、逐模型核验和新闻搜索共享硬上限 100 次外部请求；模型核验按厂商轮转，按最近核验时间优先。单厂商模型选择上限默认 100，但不会突破本轮总预算。
+
+```powershell
+Copy-Item config/sources.example.json config/sources.json
+Copy-Item .env.example .env
+# 在 .env 里填 TAVILY_API_KEY；在 sources.json 里配置你实际可用的官方价格 MCP endpoint
+token-mentor refresh --config config/sources.json --scope all --loop --interval-seconds 86400
+token-mentor market-leads --scope domestic
+token-mentor market-checks
+token-mentor price-changes
+```
+
+Tavily 搜索的结果、模型描述摘要和新闻会标为待核验；仅官方价格 MCP 返回且来源域名匹配的结构化报价会更新价格表。未配置价格 MCP 的海外厂商目前先收集官方页面/新闻线索，不会从网页摘要猜出美元价格。详细状态定义见 [市场巡检](docs/market-research.md)。

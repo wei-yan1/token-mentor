@@ -4,7 +4,7 @@
 
 ### MarketResearchAgent
 
-按配置调用阿里云、DeepSeek 等价格 MCP 和 Tavily 等搜索 MCP。`run_once()` 可由 CLI 手动调用，`run_forever(interval_seconds=...)` 可由受监督进程循环调用。每源独立隔离异常。价格工具输出规范报价，新厂商搜索结果进入 discovery；人工核实价格后才转成价格记录。
+按国内/国外/全部范围调用结构化报价 MCP 和 Tavily Search API。`run_once(scope=...)` 可由 CLI 手动调用，`run_forever(interval_seconds=86400)` 默认每天运行。每个来源、厂商或模型都留检查记录；来源异常独立隔离。搜索新闻和价格线索进入待核验库，只有结构化报价源且官方域名核验通过的数据会进入模型价格库。
 
 ### ProjectAdvisorAgent
 

@@ -7,7 +7,7 @@ from typing import Any
 
 from token_mentor.orchestration.collector import collect_once
 from token_mentor.observability.evaluation import run_evaluation
-from token_mentor.models import ProjectAnalysis
+from token_mentor.models import ProjectAnalysis, ResearchTarget
 from token_mentor.orchestration.service import RecommendationResult, RecommendationService, profile_from_text
 from token_mentor.tools.mcp import McpSourceConfig
 from token_mentor.state.storage import Catalog
@@ -16,17 +16,19 @@ from token_mentor.state.storage import Catalog
 class MarketResearchAgent:
     """Scheduled, auditable MCP market-data collection agent."""
 
-    def __init__(self, catalog: Catalog, sources: list[McpSourceConfig]) -> None:
+    def __init__(self, catalog: Catalog, sources: list[McpSourceConfig], targets: list[ResearchTarget] | None = None) -> None:
         self.catalog = catalog
         self.sources = tuple(sources)
+        self.targets = tuple(targets or ())
 
-    def run_once(self) -> dict[str, Any]:
-        return collect_once(self.catalog, list(self.sources))
+    def run_once(self, *, scope: str = "all") -> dict[str, Any]:
+        return collect_once(self.catalog, list(self.sources), scope=scope, targets=list(self.targets))
 
     def run_forever(
         self,
         *,
-        interval_seconds: int,
+        interval_seconds: int = 86_400,
+        scope: str = "all",
         stop_event: threading.Event | None = None,
         on_result: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
@@ -34,7 +36,7 @@ class MarketResearchAgent:
             raise ValueError("定时采集间隔至少为 30000 秒")
         stopper = stop_event or threading.Event()
         while not stopper.is_set():
-            result = self.run_once()
+            result = self.run_once(scope=scope)
             if on_result is not None:
                 on_result(result)
             if stopper.wait(interval_seconds):

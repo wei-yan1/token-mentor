@@ -55,3 +55,8 @@ API key 是共享实例级凭据，适合 MVP 内部服务；如需租户隔离�
 - `POST /v1/workflows/{run_id}/resume`：从第一个未完成节点恢复，使用原始快照。
 
 所有接口沿用 Bearer 认证。工作流只读当前报价，不替客户项目配置；配置差异、校验、应用和回滚是后续服务能力。
+
+
+## 市场巡检接口
+
+所有接口要求 Bearer API key。`GET /v1/market/targets?scope=domestic|foreign|all`、`/v1/market/models`、`/v1/market/leads`、`/v1/market/checks`、`/v1/market/price-changes` 分别查看厂商清单、模型资料、搜索线索、巡检状态和历史价格变化。定时采集由 Compose collector 每 24 小时执行，或由外部 scheduler 调用 CLI。

@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 from typing import Iterable
 
-from token_mentor.models import BenchmarkEvidence, ModelQuote, parse_time, utc_now
+from token_mentor.models import BenchmarkEvidence, ModelProfile, ModelQuote, ResearchTarget, parse_time, utc_now
 
 
 class Catalog:
@@ -77,6 +77,36 @@ class Catalog:
                     UNIQUE(source_name, url)
                 );
                 CREATE INDEX IF NOT EXISTS idx_discoveries_time ON discoveries(discovered_at DESC);
+                CREATE TABLE IF NOT EXISTS research_targets (
+                    id INTEGER PRIMARY KEY, provider TEXT NOT NULL, region TEXT NOT NULL,
+                    aliases_json TEXT NOT NULL, official_domains_json TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+                    last_checked_at TEXT, last_status TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(provider, region)
+                );
+                CREATE TABLE IF NOT EXISTS model_profiles (
+                    id INTEGER PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL, region TEXT NOT NULL,
+                    payload TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+                    UNIQUE(provider, model)
+                );
+                CREATE TABLE IF NOT EXISTS market_leads (
+                    id INTEGER PRIMARY KEY, source_name TEXT NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+                    snippet TEXT NOT NULL, scope TEXT NOT NULL, category TEXT NOT NULL, provider TEXT, model TEXT, published_at TEXT,
+                    verification_status TEXT NOT NULL DEFAULT 'needs_review', first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+                    UNIQUE(source_name, url)
+                );
+                CREATE TABLE IF NOT EXISTS market_checks (
+                    id INTEGER PRIMARY KEY, source_name TEXT NOT NULL, scope TEXT NOT NULL, target_provider TEXT, target_model TEXT,
+                    checked_at TEXT NOT NULL, status TEXT NOT NULL, quote_count INTEGER NOT NULL DEFAULT 0,
+                    profile_count INTEGER NOT NULL DEFAULT 0, lead_count INTEGER NOT NULL DEFAULT 0,
+                    changed_count INTEGER NOT NULL DEFAULT 0, error TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_market_checks_time ON market_checks(checked_at DESC);
+                CREATE TABLE IF NOT EXISTS price_changes (
+                    id INTEGER PRIMARY KEY, source_name TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+                    old_input REAL NOT NULL, new_input REAL NOT NULL, old_output REAL NOT NULL, new_output REAL NOT NULL,
+                    source_url TEXT NOT NULL, observed_at TEXT NOT NULL, recorded_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_price_changes_time ON price_changes(recorded_at DESC);
                 CREATE TABLE IF NOT EXISTS benchmarks (
                     id INTEGER PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL,
                     benchmark_id TEXT NOT NULL, benchmark_version TEXT NOT NULL, task TEXT NOT NULL,
@@ -103,6 +133,15 @@ class Catalog:
                 CREATE INDEX IF NOT EXISTS idx_workflow_events_run ON workflow_events(run_id, id);
                 """
             )
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(market_checks)").fetchall()}
+            if "changed_count" not in columns:
+                db.execute("ALTER TABLE market_checks ADD COLUMN changed_count INTEGER NOT NULL DEFAULT 0")
+            check_columns = {row["name"] for row in db.execute("PRAGMA table_info(market_checks)").fetchall()}
+            if "target_model" not in check_columns:
+                db.execute("ALTER TABLE market_checks ADD COLUMN target_model TEXT")
+            lead_columns = {row["name"] for row in db.execute("PRAGMA table_info(market_leads)").fetchall()}
+            if "published_at" not in lead_columns:
+                db.execute("ALTER TABLE market_leads ADD COLUMN published_at TEXT")
 
     def upsert_quotes(self, quotes: Iterable[ModelQuote]) -> int:
         rows = [
@@ -238,6 +277,105 @@ class Catalog:
             ).fetchall()
         return [dict(row) for row in rows]
 
+
+
+    def upsert_research_targets(self, rows: Iterable[ResearchTarget]) -> int:
+        now = utc_now()
+        values = [(row.provider, row.region, json.dumps(row.aliases, ensure_ascii=False),
+                   json.dumps(row.official_domains, ensure_ascii=False), int(row.enabled), now, now) for row in rows]
+        if not values:
+            return 0
+        with self._connection() as db:
+            before = db.total_changes
+            db.executemany("""INSERT INTO research_targets(provider,region,aliases_json,official_domains_json,enabled,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?) ON CONFLICT(provider,region) DO UPDATE SET aliases_json=excluded.aliases_json,
+                official_domains_json=excluded.official_domains_json,enabled=excluded.enabled,updated_at=excluded.updated_at""", values)
+            return db.total_changes - before
+
+    def list_research_targets(self, region: str | None = None, enabled_only: bool = True) -> list[dict[str, object]]:
+        query = "SELECT * FROM research_targets WHERE 1=1"
+        args: list[object] = []
+        if region in {"domestic", "foreign"}:
+            query += " AND region=?"; args.append(region)
+        if enabled_only:
+            query += " AND enabled=1"
+        query += " ORDER BY region, provider"
+        with self._connection() as db:
+            rows = db.execute(query, args).fetchall()
+        return [{**dict(row), "aliases": json.loads(row["aliases_json"]), "official_domains": json.loads(row["official_domains_json"])} for row in rows]
+
+    def upsert_model_profiles(self, rows: Iterable[ModelProfile]) -> int:
+        now = utc_now()
+        values = [(row.provider, row.model, row.region, json.dumps(row.to_dict(), ensure_ascii=False, sort_keys=True), now, now) for row in rows]
+        if not values:
+            return 0
+        with self._connection() as db:
+            before = db.total_changes
+            db.executemany("""INSERT INTO model_profiles(provider,model,region,payload,first_seen_at,last_seen_at)
+                VALUES(?,?,?,?,?,?) ON CONFLICT(provider,model) DO UPDATE SET region=excluded.region,payload=excluded.payload,last_seen_at=excluded.last_seen_at""", values)
+            return db.total_changes - before
+
+    def list_model_profiles(self, limit: int = 200, region: str | None = None) -> list[dict[str, object]]:
+        query = "SELECT payload,first_seen_at,last_seen_at FROM model_profiles"; args: list[object] = []
+        if region in {"domestic", "foreign"}:
+            query += " WHERE region=?"; args.append(region)
+        query += " ORDER BY last_seen_at DESC LIMIT ?"; args.append(max(1, min(limit, 1000)))
+        with self._connection() as db:
+            rows = db.execute(query, args).fetchall()
+        return [{**json.loads(row["payload"]), "first_seen_at": row["first_seen_at"], "last_seen_at": row["last_seen_at"]} for row in rows]
+
+    def upsert_market_leads(self, source_name: str, rows: Iterable[dict[str, object]], *, scope: str = "all", category: str = "news", provider: str | None = None) -> int:
+        now = utc_now()
+        values = [(source_name, str(row.get("title", ""))[:500], str(row.get("url", "")), str(row.get("snippet", ""))[:5000],
+                   scope, category, row.get("provider") or provider, row.get("model"), row.get("published_at"), row.get("verification_status", "needs_review"), now, now) for row in rows if row.get("url")]
+        if not values:
+            return 0
+        with self._connection() as db:
+            before = db.total_changes
+            db.executemany("""INSERT INTO market_leads(source_name,title,url,snippet,scope,category,provider,model,published_at,verification_status,first_seen_at,last_seen_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_name,url) DO UPDATE SET title=excluded.title,snippet=excluded.snippet,
+                scope=excluded.scope,category=excluded.category,provider=COALESCE(excluded.provider,market_leads.provider),model=COALESCE(excluded.model,market_leads.model),
+                published_at=COALESCE(excluded.published_at,market_leads.published_at),last_seen_at=excluded.last_seen_at""", values)
+            return db.total_changes - before
+
+    def list_market_leads(self, limit: int = 100, scope: str | None = None) -> list[dict[str, object]]:
+        query = "SELECT * FROM market_leads"; args: list[object] = []
+        if scope in {"domestic", "foreign"}:
+            query += " WHERE scope=?"; args.append(scope)
+        query += " ORDER BY last_seen_at DESC LIMIT ?"; args.append(max(1, min(limit, 1000)))
+        with self._connection() as db:
+            return [dict(row) for row in db.execute(query, args).fetchall()]
+
+    def record_market_check(self, source_name: str, scope: str, *, target_provider: str | None = None, target_model: str | None = None, status: str, quote_count: int = 0, profile_count: int = 0, lead_count: int = 0, changed_count: int = 0, error: str | None = None) -> None:
+        checked = utc_now()
+        with self._connection() as db:
+            db.execute("INSERT INTO market_checks(source_name,scope,target_provider,target_model,checked_at,status,quote_count,profile_count,lead_count,changed_count,error) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                       (source_name, scope, target_provider, target_model, checked, status, quote_count, profile_count, lead_count, changed_count, error[:2000] if error else None))
+            if target_provider:
+                db.execute("UPDATE research_targets SET last_checked_at=?,last_status=?,last_error=?,updated_at=? WHERE provider=? AND region IN ('domestic','foreign')",
+                           (checked, status, error[:2000] if error else None, checked, target_provider))
+
+    def model_verification_times(self, source_name: str) -> dict[tuple[str, str], str]:
+        with self._connection() as db:
+            rows = db.execute("""SELECT target_provider,target_model,MAX(checked_at) AS checked_at FROM market_checks
+                WHERE source_name=? AND target_model IS NOT NULL GROUP BY target_provider,target_model""", (source_name,)).fetchall()
+        return {(row["target_provider"] or "", row["target_model"]): row["checked_at"] for row in rows}
+
+    def record_price_change(self, source_name: str, change: dict[str, object]) -> None:
+        with self._connection() as db:
+            db.execute("INSERT INTO price_changes(source_name,provider,model,old_input,new_input,old_output,new_output,source_url,observed_at,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                       (source_name, change["provider"], change["model"], change["old_input"], change["new_input"],
+                        change["old_output"], change["new_output"], change["source_url"], change["observed_at"], utc_now()))
+
+    def list_price_changes(self, limit: int = 100) -> list[dict[str, object]]:
+        with self._connection() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM price_changes ORDER BY recorded_at DESC LIMIT ?",
+                    (max(1, min(limit, 1000)),)).fetchall()]
+
+    def list_market_checks(self, limit: int = 100) -> list[dict[str, object]]:
+        with self._connection() as db:
+            rows = db.execute("SELECT * FROM market_checks ORDER BY checked_at DESC LIMIT ?", (max(1, min(limit, 1000)),)).fetchall()
+        return [dict(row) for row in rows]
 
 
     def upsert_benchmarks(self, rows: Iterable[BenchmarkEvidence]) -> int:

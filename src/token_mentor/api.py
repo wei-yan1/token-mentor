@@ -129,6 +129,37 @@ def create_app(db_path: str | None = None, api_key: str | None = None) -> Any:
         require_auth(authorization)
         return catalog.list_discoveries(limit)
 
+    @app.get("/v1/market/targets")
+    def market_targets(scope: str = "all", authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
+        require_auth(authorization)
+        if scope not in {"domestic", "foreign", "all"}:
+            raise HTTPException(status_code=422, detail="scope must be domestic, foreign or all")
+        return catalog.list_research_targets(None if scope == "all" else scope)
+
+    @app.get("/v1/market/models")
+    def market_models(scope: str = "all", limit: int = 200, authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
+        require_auth(authorization)
+        if scope not in {"domestic", "foreign", "all"}:
+            raise HTTPException(status_code=422, detail="scope must be domestic, foreign or all")
+        return catalog.list_model_profiles(limit, None if scope == "all" else scope)
+
+    @app.get("/v1/market/leads")
+    def market_leads(scope: str = "all", limit: int = 100, authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
+        require_auth(authorization)
+        if scope not in {"domestic", "foreign", "all"}:
+            raise HTTPException(status_code=422, detail="scope must be domestic, foreign or all")
+        return catalog.list_market_leads(limit, scope)
+
+    @app.get("/v1/market/price-changes")
+    def market_price_changes(limit: int = 100, authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
+        require_auth(authorization)
+        return catalog.list_price_changes(limit)
+
+    @app.get("/v1/market/checks")
+    def market_checks(limit: int = 100, authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
+        require_auth(authorization)
+        return catalog.list_market_checks(limit)
+
     @app.get("/v1/catalog")
     def quote_catalog(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_auth(authorization)

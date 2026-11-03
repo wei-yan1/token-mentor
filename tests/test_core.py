@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 from importlib.util import find_spec
+import os
 
 from token_mentor.analysis import analyze_project
-from token_mentor.collector import collect_once, load_source_configs
-from token_mentor.cli import main as cli_main
-from token_mentor.models import ModelQuote
+from token_mentor.orchestration.collector import collect_once, load_collection_config, load_source_configs
+from token_mentor.cli import main as cli_main, _load_env_file
+from token_mentor.models import ModelQuote, ResearchTarget
+from token_mentor.tools.tavily import TavilySearchSource
 from token_mentor.ranking import rank_quotes
 from token_mentor.service import RecommendationService
 from token_mentor.sources.mcp import McpSourceConfig, _extract_discovery_rows
@@ -28,6 +31,17 @@ def quote(model: str, *, price: float = 1.0, observed_at: str | None = None, **k
         "observed_at": observed_at or "2026-10-27T00:00:00Z",
         **kwargs,
     })
+
+
+class EnvironmentFileTests(unittest.TestCase):
+    def test_loads_dotenv_without_overriding_process_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / ".env"
+            env_path.write_text("# comment\nTAVILY_API_KEY='local-value'\nPARENT_VALUE=file-value\nBAD LINE\n", encoding="utf-8")
+            with patch.dict(os.environ, {"PARENT_VALUE": "process-value"}, clear=True):
+                _load_env_file(env_path)
+                self.assertEqual(os.environ["TAVILY_API_KEY"], "local-value")
+                self.assertEqual(os.environ["PARENT_VALUE"], "process-value")
 
 
 class QuoteValidationTests(unittest.TestCase):
@@ -155,7 +169,134 @@ class SourceTests(unittest.TestCase):
     def test_example_mcp_config_is_valid_and_keeps_search_as_discovery(self) -> None:
         sources = load_source_configs("config/sources.example.json")
         self.assertEqual(len(sources), 3)
-        self.assertEqual(sources[-1].mode, "discovery")
+        search = next(source for source in sources if source.name == "tavily-market-research")
+        self.assertEqual(search.mode, "discovery")
+        self.assertEqual(search.transport, "tavily")
+        self.assertIn("market_news", search.query_templates)
+        self.assertIn("牛来", search.watch_terms)
+        self.assertEqual(search.max_model_queries, 100)
+        self.assertTrue(search.enabled)
+        self.assertFalse(next(x for x in sources if x.name == "aliyun-pricing").enabled)
+
+    def test_region_scope_queries_known_models_and_news(self) -> None:
+        config = McpSourceConfig.from_dict({
+            "name": "search", "mode": "discovery", "endpoint": "https://example.invalid/mcp", "tool": "search",
+            "query_templates": {"pricing": "{provider} {domains} pricing",
+                                "model_verification": "{provider} {model} official pricing {domains}",
+                                "market_news": "LLM launch news {region} {date}"},
+        })
+        domestic = ResearchTarget("DomesticAI", "domestic", ("D-AI",), ("domestic.example",))
+        foreign = ResearchTarget("ForeignAI", "foreign", (), ("foreign.example",))
+        known = ModelQuote.from_payload({**quote("D-1").to_dict(), "provider": "DomesticAI", "region": "domestic"})
+        seen = []
+        def discover(source: object, override: dict[str, str] | None = None) -> list[dict[str, str]]:
+            seen.append(override["query"] if override else "default")
+            return [{"title": "lead", "url": f"https://result.example/{len(seen)}", "snippet": "candidate"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = Catalog(Path(tmp) / "catalog.sqlite3")
+            catalog.upsert_quotes([known])
+            with patch("token_mentor.collector.McpMarketSource.discover", discover):
+                result = collect_once(catalog, [config], scope="domestic", targets=[domestic, foreign])
+            self.assertEqual(result["discoveries_received"], 3)
+            self.assertEqual(result["news_leads_received"], 1)
+            self.assertEqual(result["targets_checked"], 1)
+            self.assertTrue(any("DomesticAI" in query and "D-1" in query for query in seen))
+            self.assertFalse(any("ForeignAI" in query for query in seen))
+            self.assertEqual(len(catalog.list_market_leads(scope="domestic")), 3)
+            checks = catalog.list_market_checks()
+            self.assertEqual(sum(1 for row in checks if row["status"] == "search_only"), 2)
+
+    def test_search_budget_caps_all_sources_at_100_and_spreads_across_vendors(self) -> None:
+        templates = {"provider_research":"{provider} official models pricing",
+                     "model_verification":"{provider} {model} official model page",
+                     "market_news":"LLM launch news {region} {date}"}
+        sources = [McpSourceConfig.from_dict({"name": f"search-{index}", "mode":"discovery",
+            "endpoint":"https://example.invalid/mcp", "tool":"search", "query_templates":templates})
+            for index in range(2)]
+        targets = [ResearchTarget(f"Vendor-{index:02}", "domestic" if index % 2 == 0 else "foreign")
+                   for index in range(80)]
+        quotes = [ModelQuote.from_payload({"provider":target.provider, "model":f"model-{index:02}",
+            "input_price_per_million":1, "output_price_per_million":2, "price_unit":"CNY/1M tokens",
+            "source_url":f"https://example.invalid/{index}", "observed_at":"2026-11-03T00:00:00Z",
+            "region":target.region}) for index,target in enumerate(targets)]
+        calls=[]
+        def discover(source: object, override: dict[str, str] | None = None) -> list[dict[str, str]]:
+            calls.append((source.config.name, override["query"]))
+            return [{"title":"result", "url":f"https://results.example/{len(calls)}", "snippet":"evidence"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog=Catalog(Path(tmp)/"catalog.sqlite3")
+            catalog.upsert_quotes(quotes)
+            with patch("token_mentor.collector.McpMarketSource.discover", discover):
+                result=collect_once(catalog,sources,scope="all",targets=targets)
+        self.assertEqual(len(calls),100)
+        self.assertEqual(result["search_queries_attempted"],100)
+        self.assertEqual(result["search_queries_skipped"],224)
+        self.assertEqual(result["search_budget_remaining"],0)
+        self.assertEqual(result["news_leads_received"],2)
+        provider_queries={query.split()[0] for source,query in calls if "official models pricing" in query}
+        self.assertEqual(provider_queries,{target.provider for target in targets})
+        checked_models=sum(1 for source,query in calls if "official model page" in query)
+        self.assertEqual(checked_models,18)
+
+    def test_tavily_source_sends_runtime_key_only_in_authorization_header(self) -> None:
+        config = McpSourceConfig.from_dict({"name":"tavily", "mode":"discovery", "transport":"tavily",
+            "endpoint":"https://api.tavily.com/search", "tool":"tavily_search", "api_key_env":"TAVILY_API_KEY",
+            "arguments":{"query":"default", "search_depth":"basic"}})
+        source = TavilySearchSource(config)
+        response = BytesIO(json.dumps({"results":[{"title":"official pricing", "url":"https://official.example/pricing",
+                                                 "content":"Input: $1", "published_date":"2026-11-02"}]}).encode())
+        with patch.dict("os.environ", {"TAVILY_API_KEY":"runtime-secret"}), patch("token_mentor.tools.tavily.urlopen", return_value=response) as mocked:
+            rows = source.discover({"query":"OpenAI official pricing"})
+        request = mocked.call_args.args[0]
+        body = json.loads(request.data.decode())
+        self.assertEqual(request.get_header("Authorization"), "Bearer runtime-secret")
+        self.assertNotIn("api_key", body)
+        self.assertEqual(rows[0]["published_at"], "2026-11-02")
+        self.assertNotIn("runtime-secret", json.dumps(rows))
+
+    def test_daily_price_catalog_sync_records_changes_and_model_profiles(self) -> None:
+        target = ResearchTarget("FixtureCo", "foreign", ("Fixture",), ("fixture.example",))
+        source = McpSourceConfig.from_dict({"name":"catalog", "mode":"pricing", "scope":"all",
+            "iterate_targets":True, "endpoint":"https://example.invalid/mcp", "tool":"prices"})
+        old = ModelQuote.from_payload({**quote("m", price=1).to_dict(), "provider":"FixtureCo", "region":"foreign"})
+        new = ModelQuote.from_payload({**quote("m", price=2, observed_at="2026-11-03T00:00:00Z").to_dict(),
+                                       "provider":"FixtureCo", "region":"foreign", "description":"Coding and long-context model",
+                                       "strengths":["coding", "agents"], "source_url":"https://fixture.example/pricing"})
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = Catalog(Path(tmp) / "catalog.sqlite3")
+            catalog.upsert_quotes([old])
+            with patch("token_mentor.collector.McpMarketSource.collect_records", return_value=([new],[new.to_dict()])):
+                result = collect_once(catalog, [source], scope="foreign", targets=[target])
+            self.assertEqual(result["quotes_changed"], 1)
+            self.assertEqual(result["profiles_updated"], 1)
+            changes = catalog.list_price_changes()
+            self.assertEqual(changes[0]["new_input"], 2)
+            profiles = catalog.list_model_profiles(region="foreign")
+            self.assertEqual(profiles[0]["description"], "Coding and long-context model")
+            self.assertEqual(profiles[0]["strengths"], ["coding", "agents"])
+
+    def test_target_price_import_rejects_non_official_source_urls(self) -> None:
+        target = ResearchTarget("FixtureCo", "foreign", (), ("fixture.example",))
+        source = McpSourceConfig.from_dict({"name":"catalog", "mode":"pricing", "scope":"all",
+            "iterate_targets":True, "endpoint":"https://example.invalid/mcp", "tool":"prices"})
+        aggregator_quote = ModelQuote.from_payload({**quote("m").to_dict(), "provider":"FixtureCo",
+            "source_url":"https://aggregator.example/fixture/prices"})
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = Catalog(Path(tmp) / "catalog.sqlite3")
+            with patch("token_mentor.collector.McpMarketSource.collect_records", return_value=([aggregator_quote],[aggregator_quote.to_dict()])):
+                result = collect_once(catalog, [source], scope="foreign", targets=[target])
+            self.assertEqual(result["quotes_received"], 0)
+            self.assertEqual(len(result["sources_failed"]), 1)
+            self.assertEqual(catalog.latest_quotes(), [])
+
+    def test_targets_and_direct_tavily_source_config_parse(self) -> None:
+        sources, targets = load_collection_config("config/sources.example.json")
+        self.assertEqual(len(targets), 17)
+        self.assertEqual({x.region for x in targets}, {"domestic", "foreign"})
+        tavily = next(x for x in sources if x.transport == "tavily")
+        self.assertEqual(tavily.endpoint, "https://api.tavily.com/search")
+        self.assertIn("model_verification", tavily.query_templates)
+        self.assertEqual(tavily.max_model_queries, 100)
 
     def test_one_source_failure_keeps_successful_source_quotes(self) -> None:
         good = McpSourceConfig.from_dict({
@@ -211,6 +352,8 @@ class ApiIntegrationTests(unittest.TestCase):
             status = client.get(f"/v1/workflows/{run_id}", headers={"Authorization": f"Bearer {key}"})
             self.assertEqual(status.status_code, 200, status.text)
             self.assertEqual(status.json()["status"], "completed")
+            self.assertEqual(client.get("/v1/market/models", headers={"Authorization": f"Bearer {key}"}).status_code, 200)
+            self.assertEqual(client.get("/v1/market/leads?scope=domestic", headers={"Authorization": f"Bearer {key}"}).status_code, 200)
             resumed = client.post(f"/v1/workflows/{run_id}/resume", headers={"Authorization": f"Bearer {key}"})
             self.assertEqual(resumed.status_code, 200, resumed.text)
             feedback = client.post(

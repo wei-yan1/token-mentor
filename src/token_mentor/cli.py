@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
 from token_mentor.orchestration.agents import EvaluationAgent, MarketResearchAgent, ProjectAdvisorAgent
-from token_mentor.orchestration.collector import load_source_configs
+from token_mentor.orchestration.collector import load_collection_config
 from .models import BenchmarkEvidence, ModelQuote
 from token_mentor.orchestration.ranking import parse_weights
 from token_mentor.orchestration.service import RecommendationService
@@ -17,6 +18,29 @@ from token_mentor.orchestration.comparison import ComparisonRequest, ComparisonW
 DEFAULT_DB = ".token-mentor/catalog.sqlite3"
 
 
+def _load_env_file(path: str | Path = ".env") -> None:
+    """Load simple KEY=VALUE entries without overriding the process environment."""
+    env_path = Path(path).expanduser()
+    if not env_path.is_file():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        name, separator, value = line.partition("=")
+        name = name.strip()
+        if not separator or not name or not name.replace("_", "A").isalnum() or name[0].isdigit():
+            continue
+        if name in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '\"'}:
+            value = value[1:-1]
+        os.environ[name] = value
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="token-mentor", description="项目感知的模型价格与选型助手")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -25,7 +49,8 @@ def _parser() -> argparse.ArgumentParser:
     refresh.add_argument("--config", default="config/sources.json")
     refresh.add_argument("--db", default=DEFAULT_DB)
     refresh.add_argument("--loop", action="store_true", help="持续定时运行；生产环境建议由系统调度器托管")
-    refresh.add_argument("--interval-seconds", type=int, default=21_600)
+    refresh.add_argument("--interval-seconds", type=int, default=86_400)
+    refresh.add_argument("--scope", choices=("domestic", "foreign", "all"), default="all")
 
     recommend = sub.add_parser("recommend", help="分析项目并生成 Markdown 推荐报告")
     recommend.add_argument("--repo", default=".", help="项目目录；默认扫描当前项目")
@@ -75,6 +100,29 @@ def _parser() -> argparse.ArgumentParser:
     evaluation = sub.add_parser("eval", help="运行本地小型离线测评集")
     evaluation.add_argument("--cases", default="evals/cases.json")
 
+    targets_cmd = sub.add_parser("targets", help="查看已配置的国内/国外研究目标")
+    targets_cmd.add_argument("--db", default=DEFAULT_DB)
+    targets_cmd.add_argument("--config", default=None)
+    targets_cmd.add_argument("--scope", choices=("domestic", "foreign", "all"), default="all")
+
+    models_cmd = sub.add_parser("models", help="查看已收录的模型资料")
+    models_cmd.add_argument("--db", default=DEFAULT_DB)
+    models_cmd.add_argument("--scope", choices=("domestic", "foreign", "all"), default="all")
+    models_cmd.add_argument("--limit", type=int, default=200)
+
+    leads_cmd = sub.add_parser("market-leads", help="查看新闻热点与新模型待核验线索")
+    leads_cmd.add_argument("--db", default=DEFAULT_DB)
+    leads_cmd.add_argument("--scope", choices=("domestic", "foreign", "all"), default="all")
+    leads_cmd.add_argument("--limit", type=int, default=100)
+
+    changes_cmd = sub.add_parser("price-changes", help="查看历史价格变更记录")
+    changes_cmd.add_argument("--db", default=DEFAULT_DB)
+    changes_cmd.add_argument("--limit", type=int, default=100)
+
+    checks_cmd = sub.add_parser("market-checks", help="查看每日来源核查记录")
+    checks_cmd.add_argument("--db", default=DEFAULT_DB)
+    checks_cmd.add_argument("--limit", type=int, default=100)
+
     discoveries = sub.add_parser("discoveries", help="查看 MCP 搜索发现的新模型/价格来源线索")
     discoveries.add_argument("--db", default=DEFAULT_DB)
     discoveries.add_argument("--limit", type=int, default=50)
@@ -89,18 +137,19 @@ def _parser() -> argparse.ArgumentParser:
 
 def _refresh(args: argparse.Namespace) -> int:
     catalog = Catalog(args.db)
-    configs = load_source_configs(args.config)
-    agent = MarketResearchAgent(catalog, configs)
+    configs, targets = load_collection_config(args.config)
+    agent = MarketResearchAgent(catalog, configs, targets)
     if args.loop:
         try:
             agent.run_forever(
                 interval_seconds=args.interval_seconds,
+                scope=args.scope,
                 on_result=lambda result: print(json.dumps(result, ensure_ascii=False, indent=2)),
             )
         except KeyboardInterrupt:
             return 0
         return 0
-    result = agent.run_once()
+    result = agent.run_once(scope=args.scope)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["quotes_received"] or result["discoveries_received"] else 1
 
@@ -178,6 +227,7 @@ def _compare(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _load_env_file()
     args = _parser().parse_args(argv)
     try:
         if args.command == "refresh":
@@ -206,6 +256,25 @@ def main(argv: list[str] | None = None) -> int:
             result = EvaluationAgent().run(args.cases)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result["passed"] == result["total"] else 2
+        if args.command == "targets":
+            catalog = Catalog(args.db)
+            if args.config:
+                _, targets = load_collection_config(args.config)
+                catalog.upsert_research_targets(targets)
+            print(json.dumps(catalog.list_research_targets(None if args.scope == "all" else args.scope), ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "models":
+            print(json.dumps(Catalog(args.db).list_model_profiles(args.limit, None if args.scope == "all" else args.scope), ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "market-leads":
+            print(json.dumps(Catalog(args.db).list_market_leads(args.limit, args.scope), ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "market-checks":
+            print(json.dumps(Catalog(args.db).list_market_checks(args.limit), ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "price-changes":
+            print(json.dumps(Catalog(args.db).list_price_changes(args.limit), ensure_ascii=False, indent=2))
+            return 0
         if args.command == "discoveries":
             print(json.dumps(Catalog(args.db).list_discoveries(args.limit), ensure_ascii=False, indent=2))
             return 0

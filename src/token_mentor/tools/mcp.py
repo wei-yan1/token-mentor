@@ -24,6 +24,16 @@ class McpSourceConfig:
     endpoint: str
     tool: str
     mode: str = "pricing"
+    enabled: bool = True
+    transport: str = "mcp"
+    scope: str = "all"
+    category: str = "pricing"
+    query_argument: str = "query"
+    query_templates: dict[str, str] | None = None
+    watch_terms: tuple[str, ...] = ()
+    iterate_targets: bool = False
+    max_model_queries: int = 100
+    provider_argument: str = "provider"
     provider: str | None = None
     arguments: dict[str, Any] | None = None
     api_key_env: str | None = None
@@ -43,7 +53,15 @@ class McpSourceConfig:
         mode = str(item.get("mode", "pricing")).strip().lower()
         if mode not in {"pricing", "discovery"}:
             raise ValueError(f"{name}: mode 只能是 pricing 或 discovery")
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"{name}: enabled 必须是布尔值")
+        transport = str(item.get("transport", "mcp")).strip().lower()
+        if transport not in {"mcp", "tavily"}:
+            raise ValueError(f"{name}: transport 只能是 mcp 或 tavily")
         parsed_endpoint = urlparse(endpoint)
+        if transport == "tavily" and (mode != "discovery" or parsed_endpoint.hostname != "api.tavily.com" or parsed_endpoint.path.rstrip("/") != "/search"):
+            raise ValueError(f"{name}: Tavily transport 必须是 discovery 且 endpoint 为 https://api.tavily.com/search")
         local_hosts = {"localhost", "127.0.0.1", "::1"}
         if not parsed_endpoint.hostname:
             raise ValueError(f"{name}: MCP endpoint 必须包含主机名")
@@ -56,6 +74,35 @@ class McpSourceConfig:
             raise ValueError(f"{name}: 不要把凭据放进 MCP endpoint URL")
         if parsed_endpoint.scheme != "https" and not (parsed_endpoint.scheme == "http" and parsed_endpoint.hostname in local_hosts):
             raise ValueError(f"{name}: 远程 MCP endpoint 必须使用 HTTPS")
+        scope = str(item.get("scope", "all")).strip().lower()
+        if scope not in {"domestic", "foreign", "all"}:
+            raise ValueError(f"{name}: scope 只能是 domestic、foreign 或 all")
+        category = str(item.get("category", "pricing" if mode == "pricing" else "news")).strip().lower()
+        if category not in {"pricing", "news", "discovery", "verification"}:
+            raise ValueError(f"{name}: category 无效")
+        query_argument = str(item.get("query_argument", "query")).strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", query_argument):
+            raise ValueError(f"{name}: query_argument 格式无效")
+        query_templates = item.get("query_templates", {})
+        if not isinstance(query_templates, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in query_templates.items()):
+            raise ValueError(f"{name}: query_templates 必须是字符串映射")
+        watch_terms = item.get("watch_terms", [])
+        if not isinstance(watch_terms, list) or any(not isinstance(term, str) for term in watch_terms):
+            raise ValueError(f"{name}: watch_terms 必须是字符串数组")
+        if len(watch_terms) > 100 or any(len(term) > 100 for term in watch_terms):
+            raise ValueError(f"{name}: watch_terms 超出长度限制")
+        iterate_targets = item.get("iterate_targets", False)
+        if not isinstance(iterate_targets, bool):
+            raise ValueError(f"{name}: iterate_targets 必须是布尔值")
+        try:
+            max_model_queries = int(item.get("max_model_queries", 100))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name}: max_model_queries 必须是整数") from exc
+        if max_model_queries < 0 or max_model_queries > 2_000:
+            raise ValueError(f"{name}: max_model_queries 必须在 0 到 2000 之间")
+        provider_argument = str(item.get("provider_argument", "provider")).strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", provider_argument):
+            raise ValueError(f"{name}: provider_argument 格式无效")
         arguments = item.get("arguments", {})
         if not isinstance(arguments, dict):
             raise ValueError(f"{name}: arguments 必须是 JSON 对象")
@@ -76,6 +123,16 @@ class McpSourceConfig:
             endpoint=endpoint,
             tool=tool,
             mode=mode,
+            enabled=enabled,
+            transport=transport,
+            scope=scope,
+            category=category,
+            query_argument=query_argument,
+            query_templates=query_templates,
+            watch_terms=tuple(term.strip() for term in watch_terms if term.strip()),
+            iterate_targets=iterate_targets,
+            max_model_queries=max_model_queries,
+            provider_argument=provider_argument,
             provider=str(item["provider"]).strip() if item.get("provider") else None,
             arguments=arguments,
             api_key_env=str(item["api_key_env"]).strip() if item.get("api_key_env") else None,
@@ -224,17 +281,20 @@ class McpMarketSource:
     def __init__(self, config: McpSourceConfig) -> None:
         self.config = config
 
-    def collect(self) -> list[ModelQuote]:
-        result = self.call()
-        return [
-            ModelQuote.from_payload(row, default_provider=self.config.provider)
-            for row in _extract_quote_rows(result)
-        ]
+    def collect_records(self, arguments_override: dict[str, Any] | None = None, *, default_region: str | None = None) -> tuple[list[ModelQuote], list[dict[str, Any]]]:
+        result = self.call(arguments_override)
+        rows = _extract_quote_rows(result)
+        inherited_region = default_region or (self.config.scope if self.config.scope in {"domestic", "foreign"} else "unknown")
+        quotes = [ModelQuote.from_payload(row, default_provider=self.config.provider, default_region=inherited_region) for row in rows]
+        return quotes, rows
 
-    def discover(self) -> list[dict[str, str]]:
-        return _extract_discovery_rows(self.call())
+    def collect(self, arguments_override: dict[str, Any] | None = None) -> list[ModelQuote]:
+        return self.collect_records(arguments_override)[0]
 
-    def call(self) -> dict[str, Any]:
+    def discover(self, arguments_override: dict[str, Any] | None = None) -> list[dict[str, str]]:
+        return _extract_discovery_rows(self.call(arguments_override))
+
+    def call(self, arguments_override: dict[str, Any] | None = None) -> dict[str, Any]:
         token = None
         if self.config.api_key_env:
             token = os.environ.get(self.config.api_key_env)
@@ -247,7 +307,10 @@ class McpMarketSource:
             auth_scheme=self.config.auth_scheme,
             timeout_seconds=self.config.timeout_seconds,
         )
-        return client.call_tool(self.config.tool, self.config.arguments or {})
+        arguments = dict(self.config.arguments or {})
+        if arguments_override:
+            arguments.update(arguments_override)
+        return client.call_tool(self.config.tool, arguments)
 
 
 def _extract_discovery_rows(result: dict[str, Any]) -> list[dict[str, str]]:
@@ -279,7 +342,16 @@ def _extract_discovery_rows(result: dict[str, Any]) -> list[dict[str, str]]:
             title = str(row.get("title", row.get("name", ""))).strip()
             snippet = str(row.get("content", row.get("snippet", row.get("description", "")))).strip()
             if _safe_public_url(url) and (title or snippet):
-                rows.append({"url": url, "title": title or url, "snippet": snippet})
+                item = {"url": url, "title": title or url, "snippet": snippet}
+                published = row.get("published_at", row.get("published_date"))
+                if isinstance(published, str): item["published_at"] = published[:80]
+                for key, aliases in {"provider": ("provider", "vendor"), "model": ("model", "model_id"),
+                                     "description": ("description", "summary"), "strengths": ("strengths", "features", "specialties"),
+                                     "modalities": ("modalities", "modalities_supported")}.items():
+                    value = next((row.get(alias) for alias in aliases if row.get(alias) is not None), None)
+                    if isinstance(value, str): item[key] = value[:5_000]
+                    elif key == "strengths" and isinstance(value, list): item[key] = json.dumps([str(x)[:300] for x in value[:30]], ensure_ascii=False)
+                rows.append(item)
         if rows:
             return rows
     raise ValueError("MCP 搜索结果缺少结构化的 title/url/snippet；发现线索不会直接作为已验证价格")
