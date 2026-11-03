@@ -44,6 +44,10 @@ token-mentor recommend --repo . --intent "AI 项目成本与模型选型" --outp
 token-mentor recommend [--repo PATH] [--intent TEXT] [--weights ...] [--input-tokens N] [--output-tokens N]
 token-mentor refresh [--config PATH] [--loop] [--interval-seconds N]
 token-mentor import-prices --file prices.json
+token-mentor import-benchmarks --file benchmarks.json
+token-mentor compare --task coding --benchmark-id coding-suite --benchmark-version 1 --protocol public-v1
+token-mentor workflow status RUN_ID
+token-mentor workflow resume RUN_ID
 token-mentor discoveries [--limit N]
 token-mentor feedback REPORT_ID --rating 1..5 [--note TEXT]
 token-mentor feedback-list [--limit N]
@@ -75,7 +79,7 @@ token-mentor api [--host 127.0.0.1] [--port 8080]
 }
 ```
 
-完整离线导入格式为 `{"quotes": [ ... ]}`。模型新发现保存在 `discoveries` 表中，可运行 `token-mentor discoveries` 查看；核验官方价格后再转成报价记录。这样 Laya、牛来或后续出现的新模型可以先进入发现队列，再进入可比较价目表。
+完整离线导入格式为 `{"quotes": [ ... ]}`。benchmark 需单独导入，比较 cohort 必须匹配任务、benchmark ID/版本和协议，字段规范及工作流说明见 [比较数据与工作流](docs/benchmark-data.md)。模型新发现保存在 `discoveries` 表中，可运行 `token-mentor discoveries` 查看；核验官方价格后再转成报价记录。这样 Laya、牛来或后续出现的新模型可以先进入发现队列，再进入可比较价目表。
 
 ## HTTP 服务
 
@@ -113,3 +117,7 @@ python -m unittest discover -s tests -v
 python -m compileall -q src
 ```
 
+
+## 六层代码组织
+
+业务实现位于 `context`（上下文）、`tools`（工具）、`orchestration`（编排）、`state`（状态记忆）、`observability`（测评可观测性）、`constraints`（约束策略）。原模块路径保留兼容导入；CLI/API 使用正式模块。目录责任、依赖规则和待实现能力见 [系统架构](docs/architecture.md)。参考 DeepSeek Harness 的可组合能力拆分，保持 Python 核心精简。

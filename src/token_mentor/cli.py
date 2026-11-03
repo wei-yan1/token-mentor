@@ -5,12 +5,13 @@ import json
 from pathlib import Path
 import sys
 
-from .agents import EvaluationAgent, MarketResearchAgent, ProjectAdvisorAgent
-from .collector import load_source_configs
-from .models import ModelQuote
-from .ranking import parse_weights
-from .service import RecommendationService
-from .storage import Catalog
+from token_mentor.orchestration.agents import EvaluationAgent, MarketResearchAgent, ProjectAdvisorAgent
+from token_mentor.orchestration.collector import load_source_configs
+from .models import BenchmarkEvidence, ModelQuote
+from token_mentor.orchestration.ranking import parse_weights
+from token_mentor.orchestration.service import RecommendationService
+from token_mentor.state.storage import Catalog
+from token_mentor.orchestration.comparison import ComparisonRequest, ComparisonWorkflow
 
 
 DEFAULT_DB = ".token-mentor/catalog.sqlite3"
@@ -40,6 +41,26 @@ def _parser() -> argparse.ArgumentParser:
     importer = sub.add_parser("import-prices", help="导入符合规范的 JSON 报价，适合离线/手工校验")
     importer.add_argument("--file", required=True)
     importer.add_argument("--db", default=DEFAULT_DB)
+
+    benchmarks = sub.add_parser("import-benchmarks", help="导入可溯源的 benchmark 证据 JSON")
+    benchmarks.add_argument("--file", required=True)
+    benchmarks.add_argument("--db", default=DEFAULT_DB)
+
+    compare = sub.add_parser("compare", help="启动可恢复的五节点模型对比工作流")
+    compare.add_argument("--task", required=True)
+    compare.add_argument("--input-tokens", type=int, default=4_000)
+    compare.add_argument("--output-tokens", type=int, default=1_200)
+    compare.add_argument("--benchmark-id")
+    compare.add_argument("--benchmark-version")
+    compare.add_argument("--protocol", default="")
+    compare.add_argument("--run-id")
+    compare.add_argument("--db", default=DEFAULT_DB)
+    compare.add_argument("--output", default="reports/comparison.md")
+
+    workflow = sub.add_parser("workflow", help="查看或恢复已持久化的对比工作流")
+    workflow.add_argument("action", choices=("status", "resume"))
+    workflow.add_argument("run_id")
+    workflow.add_argument("--db", default=DEFAULT_DB)
 
     feedback = sub.add_parser("feedback", help="记录对推荐报告的评分和原因")
     feedback.add_argument("report_id")
@@ -123,6 +144,39 @@ def _import_prices(args: argparse.Namespace) -> int:
     return 0
 
 
+def _import_benchmarks(args: argparse.Namespace) -> int:
+    path = Path(args.file).expanduser().resolve()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"无法读取 benchmark 文件 {path}: {exc}") from exc
+    rows = payload.get("benchmarks") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("benchmark 文件格式应为非空 {\"benchmarks\": [...]} 数组")
+    evidence = [BenchmarkEvidence.from_dict(row) for row in rows]
+    changed = Catalog(args.db).upsert_benchmarks(evidence)
+    print(f"导入 {len(evidence)} 条 benchmark 证据；新增或更新 {changed} 条。")
+    return 0
+
+def _compare(args: argparse.Namespace) -> int:
+    catalog = Catalog(args.db)
+    quotes = catalog.latest_quotes()
+    if not quotes:
+        raise ValueError("报价库为空；先运行 refresh 或 import-prices")
+    request = ComparisonRequest(args.task, args.input_tokens, args.output_tokens, args.benchmark_id, args.benchmark_version, args.protocol)
+    import uuid
+    run_id = args.run_id or uuid.uuid4().hex[:16]
+    workflow = ComparisonWorkflow(catalog)
+    workflow.create(run_id, request, quotes, catalog.benchmark_snapshot())
+    result = workflow.run(run_id)
+    report = result["result_json"]["markdown"]
+    output = Path(args.output).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(report, encoding="utf-8")
+    print(f"对比工作流完成：{output}\nRun ID：{run_id}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -132,6 +186,15 @@ def main(argv: list[str] | None = None) -> int:
             return _recommend(args)
         if args.command == "import-prices":
             return _import_prices(args)
+        if args.command == "import-benchmarks":
+            return _import_benchmarks(args)
+        if args.command == "compare":
+            return _compare(args)
+        if args.command == "workflow":
+            workflow_agent = ComparisonWorkflow(Catalog(args.db))
+            result = workflow_agent.status(args.run_id) if args.action == "status" else workflow_agent.resume(args.run_id)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result["status"] == "completed" else 2
         if args.command == "feedback":
             Catalog(args.db).record_feedback(args.report_id, args.rating, args.note)
             print("反馈已记录，可纳入下一轮规则和权重复核。")

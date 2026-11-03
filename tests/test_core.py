@@ -199,6 +199,20 @@ class ApiIntegrationTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             body = response.json()
             self.assertIn("报告 ID", body["markdown"])
+            catalog = Catalog(Path(tmp) / "catalog.sqlite3")
+            catalog.upsert_quotes([quote("api-model")])
+            comparison = client.post(
+                "/v1/comparisons",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"task": "coding", "input_tokens": 200, "output_tokens": 100},
+            )
+            self.assertEqual(comparison.status_code, 200, comparison.text)
+            run_id = comparison.json()["run_id"]
+            status = client.get(f"/v1/workflows/{run_id}", headers={"Authorization": f"Bearer {key}"})
+            self.assertEqual(status.status_code, 200, status.text)
+            self.assertEqual(status.json()["status"], "completed")
+            resumed = client.post(f"/v1/workflows/{run_id}/resume", headers={"Authorization": f"Bearer {key}"})
+            self.assertEqual(resumed.status_code, 200, resumed.text)
             feedback = client.post(
                 "/v1/feedback",
                 headers={"Authorization": f"Bearer {key}"},

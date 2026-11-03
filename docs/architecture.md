@@ -1,41 +1,86 @@
-# 系统架构
+# 系统架构：六层职责
+
+本项目按六项 Harness 职责组织 Python 包。参考 DeepSeek Harness 的能力拆分和可组合接口思路；六层命名是本项目的设计，并非其官方目录规范。当前保持标准库核心，不引入 Cordis 或大型插件运行时。
+
+参考原始资料（2026-11-03 核对）：
+- https://github.com/deepseek-ai/deepseek-harness
+- https://github.com/deepseek-ai/deepseek-harness/blob/main/README.md
+- https://github.com/deepseek-ai/deepseek-harness/tree/main/packages
+
+## 实际目录和责任
+
+```text
+src/token_mentor/
+├── context/                    # 1. 上下文工程
+│   └── analysis.py             # README / Markdown / 有界源码扫描、项目画像
+├── tools/                      # 2. 工具系统
+│   └── mcp.py                  # MCP 协议、远程工具调用、结构化结果解析
+├── orchestration/              # 3. 执行编排
+│   ├── agents.py               # 研究、顾问和测评的调用入口
+│   ├── collector.py            # 多数据源采集、失败隔离与入库流程
+│   ├── service.py              # 画像 → 缓存 → 排序 → 报告
+│   ├── ranking.py              # 确定性排序计算
+│   └── report.py               # 推荐理由、数据库建议、Markdown 组装
+├── state/                      # 4. 状态与记忆
+│   └── storage.py              # SQLite、报价快照、共享缓存、反馈、发现队列
+├── observability/              # 5. 测评与可观测性
+│   └── evaluation.py           # 人工维护的小型意图和排序回归集
+├── constraints/                # 6. 约束与恢复策略
+│   ├── scanning.py             # 扫描文件白名单、深度和总量上限
+│   └── scoring.py              # 评分权重、配置校验
+├── models.py                   # 跨层数据契约、字段校验
+├── cli.py                      # CLI 适配和装配
+└── api.py                      # HTTP 适配、认证和装配
+```
+
+根目录原来的 analysis / agents / collector / evaluation / ranking / report / service / storage 和 sources.mcp 是兼容导入入口，没有第二份业务实现。新代码必须导入六层内的正式模块。旧导入与新导入指向相同模块，保留原有调用和测试替身行为。
+
+## 依赖边界
+
+- constraints 只依赖标准库和跨层数据契约。
+- context 可使用 constraints；不能调用外部工具、编排或数据库。
+- tools 可使用 constraints；只负责工具交互，不能决定选型、调度或写业务数据库。
+- state 可使用 constraints；不能调用工具、项目扫描或编排。
+- orchestration 组合上述能力，负责业务顺序、缓存策略和结果处理。
+- observability 可以调用 context 和确定性排序实现做回归，但不直接采集或写数据库。
+- models 不导入六层模块；CLI/API 是应用装配入口。
+
+这些是职责边界，不是强制逐层向下调用的栈。比如测评需要运行被测排序规则，编排层的 EvaluationAgent 则显式触发测评。tests/test_architecture.py 检查底层反向依赖和内部兼容入口使用。
 
 ## 数据流
 
-```text
-官方价目 / MCP 报价工具 ──> 价格快照校验 ──┐
-Tavily / MCP 搜索工具 ───> 新模型发现队列 ──┼─> SQLite catalog ─> task ranker ─> Markdown / API
-README / 源码 / 用户用途 ─> Project Advisor ─┘                  └─> cache + feedback
-                                                                  └─> offline eval gate
+```mermaid
+flowchart LR
+    P[项目 / 用户意图] --> C[context 项目画像]
+    M[MCP 数据源] --> T[tools 工具适配]
+    T --> O[orchestration 采集流程]
+    O --> S[(state 报价与发现队列)]
+    C --> R[orchestration 推荐流程]
+    S --> R
+    K[constraints 扫描与评分规则] -.-> C
+    K -.-> R
+    R --> D[Markdown / API]
+    R --> S
+    E[observability 回归测评] -.验证.-> R
 ```
 
-搜索线索和价格快照是分开的数据类型。新模型先记录标题、URL、摘要和发现时间；只有获得标准报价且来源经核验后才进入候选排名。
-
-## 包结构
-
-| 模块 | 责任 |
-|---|---|
-| `analysis.py` | 本地项目文件白名单扫描、用途/任务/技术线索识别；限制扫描深度与文件数 |
-| `agents.py` | 定时市场研究、项目选型、离线测评三个可组合的 agent 对象 |
-| `sources/mcp.py` | MCP Streamable HTTP JSON-RPC 客户端，价格/搜索工具结果解析 |
-| `models.py` | 价格与项目画像类型、输入校验和单次费用计算 |
-| `storage.py` | SQLite WAL、报价快照、共享报告缓存、反馈和发现线索 |
-| `ranking.py` | 可配置权重，成本/能力/稳定/延迟评分与缺项处理 |
-| `service.py` | 画像、价格快照、权重的缓存键与报告生成编排 |
-| `report.py` | Markdown 推荐、引用源、数据库建议和数据限制 |
-| `api.py` | 可选 FastAPI service；Bearer API key 保护业务接口 |
-| `evaluation.py` | 自建 JSON 小测评集的任务分类与排序回归 |
+搜索线索和报价快照是不同类型。发现队列中的名称、URL、摘要不直接进入价格排名；导入结构化报价仍需运营方核验原始来源。当前不会自动判定网页内容真实。
 
 ## 缓存与一致性
 
-价格按 `(provider, model, source_url, observed_at)` 幂等 upsert。报告键为项目画像 fingerprint、任务、技术、token 估算、评分权重、报价快照 fingerprint、新鲜度窗口的 SHA-256。任一输入变化都会自然形成新的缓存键；旧报告按 TTL 过期。反馈按报告缓存 ID 关联。
+价格按 `(provider, model, source_url, observed_at)` 幂等 upsert。报告缓存键包括画像 fingerprint、任务、技术、token 数、评分权重、报价 fingerprint 和新鲜度窗口。变化会形成新键，旧报告按 TTL 过期。反馈关联报告 ID。
 
-SQLite WAL 适合单机部署；连接逐次打开/提交/关闭，设置 busy timeout 与外键。单机共享 Docker volume 可供 API 和采集进程复用；多个机器写同一 SQLite 文件不是支持的高可用模式。
+SQLite 使用 WAL、busy timeout 和逐次提交/关闭的连接。支持单机 API 和采集进程共享本地 volume；多机器共同写同一 SQLite 文件不属于当前支持范围。
 
-## 关键取舍
+## 当前完成和后续实现
 
-- 不调用外部 LLM 来读项目源码；第一版推断透明、可离线运行，也减少源码离开本机的风险。
-- 能力分数、稳定率、延迟由数据源提供，报告要求运营方标明来源属性；系统不把厂商宣传标成自测。
-- HTTP 服务不接受用户指定服务端路径，只接收用户显式提交的项目用途和标签。
-- MCP 连接器支持 Streamable HTTP；stdio MCP server 和其他传输可通过适配器后续扩展。
+已实现：有界项目分析、MCP 适配、采集失败隔离、确定性推荐、共享缓存、反馈、离线测评，以及六层代码边界。
 
+尚未实现：五节点持久状态机、benchmark 同版本证据对齐和运行耗时指标、订阅权益、客户模型配置自动更新。这些不能因为目录存在就称为完成。
+
+后续落点：
+- orchestration 增加 collect / quantify / analyze / recommend / assemble 节点和状态机。
+- state 持久化 run、checkpoint、event 和固定输入快照；现已落地。
+- constraints 持有扫描上限、评分阈值和工作流恢复次数策略；配置变更校验仍待实现。
+- observability 增加节点事件、耗时、失败率和测评反馈；反馈不能直接覆盖线上规则。
+- 客户自动更新先生成配置差异，再做校验、版本化应用与回滚；权益和调度属于业务编排。

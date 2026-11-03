@@ -44,3 +44,14 @@
 
 API key 是共享实例级凭据，适合 MVP 内部服务；如需租户隔离、用户身份审计、配额/限流，应在生产 API Gateway 或后续身份层实现。服务不记录 key 内容。
 
+
+
+## 五节点比较工作流
+
+除原有 `/v1/recommend` 外，服务提供：
+
+- `POST /v1/comparisons`：读取当前报价和 benchmark 快照，执行 `collect → quantify → analyze → recommend → assemble`，返回 `run_id` 和 Markdown。请求包含 `task`、`input_tokens`、`output_tokens`，可选 `benchmark_id`、`benchmark_version`、`protocol`。
+- `GET /v1/workflows/{run_id}`：返回状态、当前节点、固定输入快照、检查点和事件。
+- `POST /v1/workflows/{run_id}/resume`：从第一个未完成节点恢复，使用原始快照。
+
+所有接口沿用 Bearer 认证。工作流只读当前报价，不替客户项目配置；配置差异、校验、应用和回滚是后续服务能力。

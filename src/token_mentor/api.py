@@ -2,8 +2,9 @@ import hmac
 import os
 from typing import Any
 
-from .service import RecommendationService, profile_from_text
-from .storage import Catalog
+from token_mentor.orchestration.service import RecommendationService, profile_from_text
+from token_mentor.state.storage import Catalog
+from token_mentor.orchestration.comparison import ComparisonRequest as WorkflowComparisonRequest, ComparisonWorkflow
 
 
 def create_app(db_path: str | None = None, api_key: str | None = None) -> Any:
@@ -34,6 +35,14 @@ def create_app(db_path: str | None = None, api_key: str | None = None) -> Any:
         input_tokens: int = Field(default=4_000, ge=0, le=10_000_000)
         output_tokens: int = Field(default=1_200, ge=0, le=10_000_000)
         weights: dict[str, float] | None = None
+
+    class ComparisonRequestBody(BaseModel):
+        task: str = Field(min_length=1, max_length=200)
+        input_tokens: int = Field(default=4_000, ge=0, le=10_000_000)
+        output_tokens: int = Field(default=1_200, ge=0, le=10_000_000)
+        benchmark_id: str | None = Field(default=None, max_length=200)
+        benchmark_version: str | None = Field(default=None, max_length=100)
+        protocol: str = Field(default="", max_length=300)
 
     class FeedbackRequest(BaseModel):
         report_id: str = Field(min_length=16, max_length=16)
@@ -67,6 +76,44 @@ def create_app(db_path: str | None = None, api_key: str | None = None) -> Any:
             return {"report_id": result.report_id, "cached": result.cached, "markdown": result.markdown}
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/comparisons")
+    def create_comparison(payload: ComparisonRequestBody, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        require_auth(authorization)
+        try:
+            import uuid
+            quotes = catalog.latest_quotes()
+            if not quotes:
+                raise ValueError("报价库为空")
+            request = WorkflowComparisonRequest(payload.task, payload.input_tokens, payload.output_tokens,
+                                                payload.benchmark_id, payload.benchmark_version, payload.protocol)
+            run_id = uuid.uuid4().hex
+            workflow = ComparisonWorkflow(catalog)
+            workflow.create(run_id, request, quotes, catalog.benchmark_snapshot())
+            result = workflow.run(run_id)
+            return {"run_id": run_id, "status": result["status"], "markdown": result["result_json"].get("markdown", "")}
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/v1/workflows/{run_id}")
+    def workflow_status(run_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        require_auth(authorization)
+        try:
+            return ComparisonWorkflow(catalog).status(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/v1/workflows/{run_id}/resume")
+    def workflow_resume(run_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        require_auth(authorization)
+        try:
+            return ComparisonWorkflow(catalog).resume(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/v1/feedback", status_code=201)
     def feedback(payload: FeedbackRequest, authorization: str | None = Header(default=None)) -> dict[str, str]:

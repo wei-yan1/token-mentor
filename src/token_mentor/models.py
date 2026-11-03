@@ -189,6 +189,49 @@ class ModelQuote:
 
 
 @dataclass(frozen=True, slots=True)
+class BenchmarkEvidence:
+    """Published or internal benchmark observation with an explicit comparison protocol."""
+
+    provider: str
+    model: str
+    benchmark_id: str
+    benchmark_version: str
+    task: str
+    score: float
+    max_score: float = 100.0
+    source_url: str = ""
+    observed_at: str = ""
+    protocol: str = ""
+
+    def __post_init__(self) -> None:
+        for key in ("provider", "model", "benchmark_id", "benchmark_version", "task", "source_url", "observed_at", "protocol"):
+            value = getattr(self, key)
+            if not isinstance(value, str) or (key != "protocol" and not value.strip()):
+                raise ValueError(f"benchmark {key} 必须是非空字符串")
+        score = _finite_number(self.score, "benchmark score")
+        maximum = _finite_number(self.max_score, "benchmark max_score", minimum=0.000001)
+        if score > maximum:
+            raise ValueError("benchmark score 必须位于 0 和 max_score 之间")
+        url = urlparse(self.source_url)
+        if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
+            raise ValueError("benchmark source_url 必须是公开 http(s) URL")
+        object.__setattr__(self, "score", score)
+        object.__setattr__(self, "max_score", maximum)
+        object.__setattr__(self, "observed_at", parse_time(self.observed_at).isoformat().replace("+00:00", "Z"))
+
+    @property
+    def normalized_score(self) -> float:
+        return float(self.score) / float(self.max_score)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "BenchmarkEvidence":
+        return cls(**payload)
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectAnalysis:
     root: str
     summary: str
