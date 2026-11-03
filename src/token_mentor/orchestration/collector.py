@@ -128,6 +128,17 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
     errors: list[dict[str, str]] = []
     search_queries_attempted = 0
     search_queries_skipped = 0
+    news_regions_count = 2 if scope == "all" else 1
+    news_reserve_remaining = 0
+    for configured_source in configs:
+        if not configured_source.enabled or configured_source.mode != "discovery" or not _source_in_scope(configured_source, scope):
+            continue
+        categories = configured_source.query_templates or {}
+        news_count = sum(1 for category in ("market_news", "news") if category in categories)
+        if not categories and configured_source.category in {"market_news", "news"}:
+            news_count = 1
+        news_reserve_remaining += news_count * news_regions_count
+    news_reserve_remaining = min(news_reserve_remaining, MAX_SEARCH_REQUESTS_PER_REFRESH)
     for config in configs:
         if not config.enabled or not _source_in_scope(config, scope):
             continue
@@ -140,7 +151,7 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
             if not price_targets and config.iterate_targets:
                 continue
             for target in price_targets:
-                if search_queries_attempted >= MAX_SEARCH_REQUESTS_PER_REFRESH:
+                if search_queries_attempted >= MAX_SEARCH_REQUESTS_PER_REFRESH - news_reserve_remaining:
                     search_queries_skipped += 1
                     continue
                 search_queries_attempted += 1
@@ -247,10 +258,14 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
             jobs.append((config.category, None, "", None))
 
         for category, target, query, model_name in jobs:
-            if search_queries_attempted >= MAX_SEARCH_REQUESTS_PER_REFRESH:
+            is_news_query = category in {"market_news", "news"}
+            available_limit = MAX_SEARCH_REQUESTS_PER_REFRESH if is_news_query else MAX_SEARCH_REQUESTS_PER_REFRESH - news_reserve_remaining
+            if search_queries_attempted >= available_limit:
                 search_queries_skipped += 1
                 continue
             search_queries_attempted += 1
+            if is_news_query and news_reserve_remaining:
+                news_reserve_remaining -= 1
             try:
                 override = {config.query_argument: query} if query else None
                 if config.transport == "tavily":
@@ -310,6 +325,7 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
             "research_requests_attempted": search_queries_attempted,
             "research_requests_skipped": search_queries_skipped,
             "research_request_budget_remaining": MAX_SEARCH_REQUESTS_PER_REFRESH - search_queries_attempted,
+            "search_budget_remaining": MAX_SEARCH_REQUESTS_PER_REFRESH - search_queries_attempted,
             "discoveries_received": discovery_total, "news_leads_received": news_total,
             "sources_ok": successes, "sources_failed": errors, "pruned_quotes": pruned[0]}
 

@@ -232,11 +232,40 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(result["search_queries_attempted"],100)
         self.assertEqual(result["search_queries_skipped"],224)
         self.assertEqual(result["search_budget_remaining"],0)
-        self.assertEqual(result["news_leads_received"],2)
+        self.assertEqual(result["news_leads_received"],4)
         provider_queries={query.split()[0] for source,query in calls if "official models pricing" in query}
         self.assertEqual(provider_queries,{target.provider for target in targets})
         checked_models=sum(1 for source,query in calls if "official model page" in query)
-        self.assertEqual(checked_models,18)
+        self.assertEqual(checked_models,16)
+
+    def test_global_budget_counts_price_catalog_and_reserves_news_calls(self) -> None:
+        pricing=McpSourceConfig.from_dict({"name":"price-catalog","mode":"pricing","scope":"all",
+            "iterate_targets":True,"endpoint":"https://catalog.example/mcp","tool":"prices"})
+        news=McpSourceConfig.from_dict({"name":"news-search","mode":"discovery","scope":"all",
+            "endpoint":"https://search.example/mcp","tool":"search",
+            "query_templates":{"market_news":"LLM headlines {region}"}})
+        targets=[ResearchTarget(f"Vendor-{i:03}","domestic" if i%2==0 else "foreign",(),(f"vendor-{i:03}.example",)) for i in range(100)]
+        price_calls=[]; news_calls=[]
+        def fetch_prices(source: object, override: dict[str,str] | None=None, *, default_region: str | None=None):
+            provider=override["provider"]; price_calls.append(provider)
+            index=int(provider.rsplit("-",1)[1]);domain=f"vendor-{index:03}.example"
+            item=ModelQuote.from_payload({"provider":provider,"model":"catalog-model","input_price_per_million":1,
+                "output_price_per_million":2,"price_unit":"CNY/1M tokens","source_url":f"https://{domain}/pricing",
+                "observed_at":"2026-11-03T00:00:00Z","region":default_region})
+            return [item],[item.to_dict()]
+        def fetch_news(source: object, override: dict[str,str] | None=None):
+            news_calls.append(override["query"])
+            return [{"title":"headline","url":f"https://news.example/{len(news_calls)}","snippet":"lead"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog=Catalog(Path(tmp)/"catalog.sqlite3")
+            with patch("token_mentor.collector.McpMarketSource.collect_records",fetch_prices), \
+                 patch("token_mentor.collector.McpMarketSource.discover",fetch_news):
+                result=collect_once(catalog,[pricing,news],scope="all",targets=targets)
+        self.assertEqual(result["research_requests_attempted"],100)
+        self.assertEqual(result["research_requests_skipped"],2)
+        self.assertEqual(len(price_calls),98)
+        self.assertEqual(len(news_calls),2)
+        self.assertEqual(result["news_leads_received"],2)
 
     def test_tavily_source_sends_runtime_key_only_in_authorization_header(self) -> None:
         config = McpSourceConfig.from_dict({"name":"tavily", "mode":"discovery", "transport":"tavily",
