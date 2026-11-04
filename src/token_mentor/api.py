@@ -2,7 +2,8 @@ import hmac
 import os
 from typing import Any
 
-from token_mentor.orchestration.service import RecommendationService, profile_from_text
+from token_mentor.orchestration.agents import ProjectAdvisorAgent
+from token_mentor.orchestration.service import RecommendationService
 from token_mentor.state.storage import Catalog
 from token_mentor.orchestration.comparison import ComparisonRequest as WorkflowComparisonRequest, ComparisonWorkflow
 
@@ -66,9 +67,10 @@ def create_app(db_path: str | None = None, api_key: str | None = None) -> Any:
     def recommend(payload: RecommendationRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_auth(authorization)
         try:
-            project = profile_from_text(payload.intent, payload.technologies, payload.tasks)
-            result = service.recommend_profile(
-                project,
+            result = ProjectAdvisorAgent(service).from_intent(
+                payload.intent,
+                technologies=payload.technologies,
+                tasks=payload.tasks or None,
                 input_tokens=payload.input_tokens,
                 output_tokens=payload.output_tokens,
                 weights=payload.weights,

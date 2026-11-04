@@ -13,6 +13,16 @@ TASK_TITLES = {
     "translation": "翻译与多语言",
     "summarization": "摘要与报告",
     "rewrite": "改写与文案",
+    "embeddings": "文本/多模态向量化",
+    "speech_recognition": "语音识别与转写",
+    "speech_generation": "语音合成",
+    "video_generation": "视频生成",
+    "video_understanding": "视频理解",
+    "image_generation": "图像生成",
+    "multimodal": "多模态与视觉理解",
+    "reranking": "检索重排",
+    "3d_generation": "3D 内容生成",
+    "self_hosted": "本地/私有化部署",
     "general": "通用问答",
 }
 
@@ -23,7 +33,21 @@ TASK_CAPABILITIES = {
     "summarization": ("summarization", "summary"),
     "rewrite": ("writing", "rewrite"),
     "general": ("general", "quality"),
+    "embeddings": ("embeddings", "text_embedding", "multimodal_embedding"),
+    "speech_recognition": ("speech_recognition", "asr"),
+    "speech_generation": ("speech_generation", "tts"),
+    "video_generation": ("video_generation",),
+    "video_understanding": ("video_understanding", "multimodal"),
+    "image_generation": ("image_generation",),
+    "multimodal": ("multimodal", "visual_understanding"),
+    "reranking": ("reranking",),
+    "3d_generation": ("3d_generation",),
+    "self_hosted": ("self_hosted",),
 }
+
+
+def capabilities_for_task(task: str) -> tuple[str, ...]:
+    return TASK_CAPABILITIES.get(task, (task, "quality"))
 
 
 def render_report(
@@ -67,14 +91,22 @@ def render_report(
         )
         lines.append("")
     if not tasks:
-        lines.extend(["当前报价库为空，尚不能计算模型排序。先配置 MCP 报价源并运行 `token-mentor refresh`。", ""])
+        lines.extend(["当前报价库为空，尚不能计算模型排序。先配置 Tavily 搜索和官方定价页、价格 MCP，或运行 `import-prices` 导入规范报价。", ""])
+    fx_evidence: dict[tuple[str, str], tuple[str, str, float]] = {}
     for task in tasks:
         title = str(task["title"])
         ranked = task["ranked"]
         lines.extend([f"### {title}", ""])
+        if task.get("lane_note"):
+            lines.extend([str(task["lane_note"]), ""])
         if not isinstance(ranked, list) or not ranked:
             lines.extend(["暂无可用报价。", ""])
             continue
+        for candidate in ranked:
+            if isinstance(candidate, RankedQuote) and candidate.quote.source_currency != "CNY" and candidate.quote.fx_source_url:
+                quote = candidate.quote
+                fx_evidence[(quote.source_currency, quote.fx_observed_at or "")] = (
+                    quote.source_currency, quote.fx_source_url, quote.fx_rate_to_cny)
         lines.append("| 排名 | 模型 | 估算单次成本 | 综合分 | 成本/能力/稳定/速度 | 输入 / 输出单价（元/百万 token） | 报价时间 | 来源 |")
         lines.append("|---:|---|---:|---:|---|---:|---|---|")
         for index, item in enumerate(ranked[:5], start=1):
@@ -108,7 +140,9 @@ def render_report(
         "## 报价可信度",
         "",
         f"- 每条报价记录保留来源 URL、抓取时间、输入/输出价格和计价单位。超过 {freshness_days} 天的报价会标为过期，仍保留以供核对。",
-        "- 价格建议只比较同币种、同计价单位的数据。当前成本估算不含缓存折扣、上下文溢价、批量折扣、网络/部署和税费。",
+        "- 排序和成本使用人民币/百万 token 标准价；外币原价、折算率、汇率日期和汇率来源随报价保存。成本估算不含缓存折扣、上下文溢价、批量折扣、网络/部署和税费。",
+        *[f"- {currency}/CNY 汇率 {rate:g}（{rate_date[:10] or '日期未提供'}），来源：[Frankfurter](<{_md_url(url)}>)。"
+          for (_, rate_date), (currency, url, rate) in sorted(fx_evidence.items())],
         "- 能力、稳定性和延迟采用数据源提供的值；导入前应标明它们来自厂商资料还是自有测评，框架不会自动认定为自有实测结论。",
         "- 速度和稳定性应由自有测评集持续压测后导入；厂商宣传材料不自动视为实测结论。",
         "",

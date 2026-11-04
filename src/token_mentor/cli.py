@@ -174,7 +174,7 @@ def _recommend(args: argparse.Namespace) -> int:
     state = "命中共享缓存" if result.cached else "新生成"
     print(f"报告已{state}：{output}\n报告 ID：{result.report_id}")
     if not catalog.latest_quotes():
-        print("提示：目前报价库为空。先配置 MCP 来源运行 refresh，或用 import-prices 导入规范报价。", file=sys.stderr)
+        print("提示：目前报价库为空。先配置 Tavily 搜索和官方定价页运行 refresh，或接入价格 MCP / 用 import-prices 导入规范报价。", file=sys.stderr)
     return 0
 
 

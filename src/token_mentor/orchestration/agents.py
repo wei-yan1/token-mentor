@@ -5,7 +5,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from token_mentor.context.analysis import analyze_project
 from token_mentor.orchestration.collector import collect_once
+from token_mentor.orchestration.decision import TaskIntentDecisionAgent
 from token_mentor.observability.evaluation import run_evaluation
 from token_mentor.models import ProjectAnalysis, ResearchTarget
 from token_mentor.orchestration.service import RecommendationResult, RecommendationService, profile_from_text
@@ -58,13 +60,15 @@ class ProjectAdvisorAgent:
         output_tokens: int = 1_200,
         weights: Mapping[str, float] | None = None,
     ) -> RecommendationResult:
-        return self.service.recommend_project(
-            project_root,
-            intent=intent,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            weights=weights,
-        )
+        project = analyze_project(project_root, intent=intent)
+        decision = TaskIntentDecisionAgent().classify(intent.strip() if intent and intent.strip() else project.summary)
+        from hashlib import sha256
+        fingerprint = sha256(f"{project.content_fingerprint}:{decision.tasks}:{decision.source}".encode()).hexdigest()
+        project = ProjectAnalysis(project.root, project.summary,
+            (*project.evidence, f"任务判断：{decision.primary_task}（{decision.source}；{decision.rationale}）"),
+            decision.tasks, project.technologies, fingerprint)
+        return self.service.recommend_profile(project, input_tokens=input_tokens,
+                                              output_tokens=output_tokens, weights=weights)
 
     def from_intent(
         self,
@@ -77,6 +81,13 @@ class ProjectAdvisorAgent:
         weights: Mapping[str, float] | None = None,
     ) -> RecommendationResult:
         profile: ProjectAnalysis = profile_from_text(intent, technologies, tasks)
+        decision = TaskIntentDecisionAgent().classify(intent) if not tasks else None
+        if decision is not None:
+            from hashlib import sha256
+            fingerprint = sha256(f"{profile.content_fingerprint}:{decision.tasks}:{decision.source}".encode()).hexdigest()
+            profile = ProjectAnalysis(profile.root, profile.summary,
+                (*profile.evidence, f"任务判断：{decision.primary_task}（{decision.source}；{decision.rationale}）"),
+                decision.tasks, profile.technologies, fingerprint)
         return self.service.recommend_profile(
             profile,
             input_tokens=input_tokens,

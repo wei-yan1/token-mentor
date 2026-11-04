@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 import math
+import re
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
@@ -81,6 +82,12 @@ class ModelQuote:
     description: str = ""
     strengths: tuple[str, ...] = ()
     modalities: tuple[str, ...] = ()
+    source_currency: str = "CNY"
+    source_input_price_per_million: float | None = None
+    source_output_price_per_million: float | None = None
+    fx_rate_to_cny: float = 1.0
+    fx_source_url: str | None = None
+    fx_observed_at: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.provider, str) or not isinstance(self.model, str) or not self.provider.strip() or not self.model.strip():
@@ -133,6 +140,24 @@ class ModelQuote:
             clean[name] = value / 100.0 if value > 1 else value
         object.__setattr__(self, "capabilities", clean)
         object.__setattr__(self, "currency", "CNY")
+        source_currency = str(self.source_currency or "CNY").upper()
+        if not re.fullmatch(r"[A-Z]{3}", source_currency):
+            raise ValueError("source_currency 必须是 ISO 4217 货币代码")
+        object.__setattr__(self, "source_currency", source_currency)
+        for field_name in ("source_input_price_per_million", "source_output_price_per_million"):
+            raw_price = getattr(self, field_name)
+            if raw_price is not None:
+                object.__setattr__(self, field_name, _finite_number(raw_price, field_name))
+        rate = _finite_number(self.fx_rate_to_cny, "fx_rate_to_cny", minimum=0.0000001)
+        object.__setattr__(self, "fx_rate_to_cny", rate)
+        if self.fx_source_url is not None:
+            fx_url = str(self.fx_source_url).strip()
+            parsed_fx_url = urlparse(fx_url)
+            if parsed_fx_url.scheme != "https" or not parsed_fx_url.hostname:
+                raise ValueError("fx_source_url 必须是公开 HTTPS 链接")
+            object.__setattr__(self, "fx_source_url", fx_url)
+        if self.fx_observed_at is not None:
+            object.__setattr__(self, "fx_observed_at", parse_time(self.fx_observed_at).isoformat(timespec="seconds").replace("+00:00", "Z"))
         if self.region not in {"domestic", "foreign", "all", "unknown"}:
             raise ValueError("region 必须是 domestic、foreign、all 或 unknown")
         object.__setattr__(self, "description", str(self.description or "").strip()[:5_000])
@@ -175,6 +200,18 @@ class ModelQuote:
             source_url=source_url.strip(),
             observed_at=observed_at.strip(),
             currency=currency,
+            source_currency=str(_first(payload, "source_currency", default=currency)).upper(),
+            source_input_price_per_million=(
+                _finite_number(_first(payload, "source_input_price_per_million"), "source_input_price_per_million")
+                if _first(payload, "source_input_price_per_million") is not None else None
+            ),
+            source_output_price_per_million=(
+                _finite_number(_first(payload, "source_output_price_per_million"), "source_output_price_per_million")
+                if _first(payload, "source_output_price_per_million") is not None else None
+            ),
+            fx_rate_to_cny=_finite_number(_first(payload, "fx_rate_to_cny", default=1.0), "fx_rate_to_cny", minimum=0.0000001),
+            fx_source_url=_first(payload, "fx_source_url"),
+            fx_observed_at=_first(payload, "fx_observed_at"),
         context_tokens=_token_count(context, "context_tokens", allow_zero=False) if context is not None else None,
             cached_input_price_per_million=(
                 _finite_number(_first(payload, "cached_input_price_per_million", "cached_input_price"), "cached_input_price_per_million")
@@ -232,6 +269,9 @@ class ModelProfile:
     verification_status: str = "unverified"
     modalities: tuple[str, ...] = ()
     context_tokens: int | None = None
+    task_lanes: tuple[str, ...] = ()
+    capability_tags: tuple[str, ...] = ()
+    features: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.model.strip():
@@ -252,6 +292,9 @@ class ModelProfile:
         object.__setattr__(self, "description", self.description.strip()[:5000])
         object.__setattr__(self, "strengths", _string_tuple(self.strengths, "strengths", maximum=30))
         object.__setattr__(self, "modalities", _string_tuple(self.modalities, "modalities", maximum=20))
+        object.__setattr__(self, "task_lanes", _string_tuple(self.task_lanes, "task_lanes", maximum=30))
+        object.__setattr__(self, "capability_tags", _string_tuple(self.capability_tags, "capability_tags", maximum=50))
+        object.__setattr__(self, "features", _string_tuple(self.features, "features", maximum=50))
         if self.context_tokens is not None:
             object.__setattr__(self, "context_tokens", _token_count(self.context_tokens, "context_tokens", allow_zero=False))
         object.__setattr__(self, "observed_at", parse_time(self.observed_at).isoformat(timespec="seconds").replace("+00:00", "Z"))
@@ -269,6 +312,8 @@ class ResearchTarget:
     aliases: tuple[str, ...] = ()
     official_domains: tuple[str, ...] = ()
     enabled: bool = True
+    pricing_urls: tuple[str, ...] = ()
+    model_lanes: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.provider.strip():
@@ -277,6 +322,25 @@ class ResearchTarget:
             raise ValueError("research target region 必须是 domestic 或 foreign")
         object.__setattr__(self, "aliases", tuple(str(x).strip() for x in self.aliases if str(x).strip())[:30])
         object.__setattr__(self, "official_domains", tuple(str(x).strip().lower() for x in self.official_domains if str(x).strip())[:20])
+        checked_urls = []
+        for value in self.pricing_urls:
+            url = str(value).strip()
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme != "https" or not host or not any(host == domain or host.endswith("." + domain)
+                                                                for domain in self.official_domains):
+                raise ValueError("pricing_urls 必须使用 HTTPS 且域名位于 official_domains 中")
+            checked_urls.append(url)
+        object.__setattr__(self, "pricing_urls", tuple(checked_urls[:10]))
+        lanes: dict[str, tuple[str, ...]] = {}
+        for lane, terms in self.model_lanes.items():
+            name = str(lane).strip().lower()
+            if not name or not isinstance(terms, (list, tuple)):
+                raise ValueError("model_lanes 必须是字符串到词条数组的映射")
+            clean_terms = tuple(str(term).strip()[:100] for term in terms if str(term).strip())
+            if clean_terms:
+                lanes[name] = clean_terms[:30]
+        object.__setattr__(self, "model_lanes", lanes)
 
 
 @dataclass(frozen=True, slots=True)

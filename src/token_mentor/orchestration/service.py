@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Mapping
 
 from token_mentor.context.analysis import analyze_project
+from token_mentor.context.task_intent import TaskIntent
 from token_mentor.models import ProjectAnalysis, _token_count
 from token_mentor.orchestration.ranking import RankedQuote, normalize_weights, rank_quotes
-from token_mentor.orchestration.report import TASK_CAPABILITIES, TASK_TITLES, _md_escape, _md_url, database_recommendations, render_report
+from token_mentor.orchestration.report import capabilities_for_task, TASK_TITLES, _md_escape, _md_url, database_recommendations, render_report
 from token_mentor.state.storage import Catalog
 
 
@@ -27,6 +28,26 @@ class RecommendationService:
         self.catalog = catalog
         self.cache_ttl_seconds = cache_ttl_seconds
         self.freshness_days = freshness_days
+
+    def recommend_project_with_intent(
+        self,
+        project_root: str | Path,
+        *,
+        intent: str | None = None,
+        input_tokens: int = 4_000,
+        output_tokens: int = 1_200,
+        weights: Mapping[str, float] | None = None,
+        decision: TaskIntent | None = None,
+    ) -> RecommendationResult:
+        project = analyze_project(project_root, intent=intent)
+        if decision is not None:
+            decision_fingerprint = hashlib.sha256(
+                f"{project.content_fingerprint}:{decision.tasks}:{decision.source}".encode("utf-8")
+            ).hexdigest()
+            project = ProjectAnalysis(project.root, project.summary,
+                (*project.evidence, f"任务判断：{decision.primary_task}（{decision.source}；{decision.rationale}）"),
+                decision.tasks, project.technologies, decision_fingerprint)
+        return self.recommend_profile(project, input_tokens=input_tokens, output_tokens=output_tokens, weights=weights)
 
     def recommend_project(
         self,
@@ -78,21 +99,35 @@ class RecommendationService:
 
         per_task: list[dict[str, object]] = []
         omitted_axes: set[str] = set()
+        profiles = self.catalog.list_model_profiles(limit=2_000)
+        lane_lookup = {(str(row.get("provider", "")).casefold(), str(row.get("model", "")).casefold()):
+                       set(row.get("task_lanes", ())) for row in profiles}
         for task in project.tasks:
-            capability_options = TASK_CAPABILITIES.get(task, (task, "quality"))
+            capability_options = capabilities_for_task(task)
             capability = next(
                 (name for name in capability_options if any(name in quote.capabilities for quote in quotes)),
                 "quality",
             )
+            task_quotes = quotes
+            lane_matches = [quote for quote in quotes if set(capability_options) & lane_lookup.get(
+                (quote.provider.casefold(), quote.model.casefold()), set())]
+            lane_note = ""
+            if lane_matches:
+                task_quotes = lane_matches
+                lane_note = f"按模型目录中的 {TASK_TITLES.get(task, task)} 能力标签筛选了 {len(lane_matches)} 个有正式报价的候选模型。"
+            elif task in {"embeddings", "speech_recognition", "speech_generation", "video_generation",
+                          "video_understanding", "image_generation", "multimodal", "reranking", "3d_generation", "self_hosted"}:
+                lane_note = "目前缺少与此任务匹配且同时具有正式报价的模型记录；暂以现有报价候选排序，建议补齐对应赛道目录和官方价格。"
             ranked, omitted = rank_quotes(
-                quotes,
+                task_quotes,
                 capability=capability,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 weights=configured,
             )
             omitted_axes.update(omitted)
-            per_task.append({"task": task, "title": TASK_TITLES.get(task, task), "ranked": ranked})
+            per_task.append({"task": task, "title": TASK_TITLES.get(task, task), "ranked": ranked,
+                             "lane_note": lane_note})
 
         freshness = self._freshness_warning(quotes)
         markdown = render_report(

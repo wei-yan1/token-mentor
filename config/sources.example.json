@@ -1,6 +1,24 @@
 {
   "sources": [
     {
+      "name": "aliyun-model-catalog",
+      "mode": "discovery",
+      "transport": "aliyun_models",
+      "scope": "domestic",
+      "category": "model_catalog",
+      "endpoint": "https://{workspace_id}.cn-beijing.maas.aliyuncs.com/api/v1/models",
+      "tool": "list_models",
+      "api_key_env": "DASHSCOPE_API_KEY",
+      "arguments": {
+        "workspace_id_env": "DASHSCOPE_WORKSPACE_ID",
+        "language": "zh-CN",
+        "page_size": 100,
+        "max_pages": 20,
+        "supports": "inference"
+      },
+      "enabled": true
+    },
+    {
       "name": "aliyun-pricing",
       "mode": "pricing",
       "scope": "domestic",
@@ -37,6 +55,7 @@
       "query_argument": "query",
       "query_templates": {
         "pricing": "{provider} {aliases} official API pricing input output token price {domains}",
+        "task_pricing": "{provider} {aliases} official API pricing {task_terms} {domains}",
         "model_news": "{provider} {aliases} new AI model release announcement {domains}",
         "market_news": "AI large language model pricing launch news trending {watch_terms} {region} {date}",
         "model_verification": "\"{model}\" {provider} official API pricing description strengths context window {domains}"
@@ -57,7 +76,13 @@
       "max_model_queries": 100,
       "watch_terms": [
         "牛来",
-        "Ox Alpha"
+        "Ox Alpha",
+        "text embeddings API",
+        "multimodal vision audio video model API",
+        "speech recognition transcription API",
+        "text to speech voice API",
+        "reranking model API",
+        "self-hosted open weights model"
       ],
       "enabled": true
     }
@@ -75,7 +100,18 @@
       "official_domains": [
         "aliyun.com",
         "qwen.ai"
-      ]
+      ],
+      "pricing_urls": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "model_lanes": {
+        "chat_reasoning": ["chat completions", "reasoning model", "coding model"],
+        "embeddings": ["text embeddings", "vector embedding API", "multilingual embedding"],
+        "multimodal": ["vision language model", "image understanding", "video understanding", "multimodal API"],
+        "speech": ["speech recognition", "audio transcription", "text to speech", "voice model"],
+        "reranking": ["reranker", "text reranking API"],
+        "self_hosted": ["open weights model", "self hosted inference", "deployment requirements"]
+      }
     },
     {
       "provider": "DeepSeek",
@@ -85,6 +121,9 @@
       ],
       "official_domains": [
         "deepseek.com"
+      ],
+      "pricing_urls": [
+        "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
       ]
     },
     {
@@ -179,6 +218,9 @@
       ],
       "official_domains": [
         "openai.com"
+      ],
+      "pricing_urls": [
+        "https://developers.openai.com/api/docs/pricing"
       ]
     },
     {
@@ -201,6 +243,9 @@
       "official_domains": [
         "ai.google.dev",
         "deepmind.google"
+      ],
+      "pricing_urls": [
+        "https://ai.google.dev/gemini-api/docs/pricing"
       ]
     },
     {
@@ -253,6 +298,9 @@
       ],
       "official_domains": [
         "aws.amazon.com"
+      ],
+      "pricing_urls": [
+        "https://aws.amazon.com/bedrock/pricing"
       ]
     }
   ]

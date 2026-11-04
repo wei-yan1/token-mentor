@@ -12,12 +12,17 @@
 ```text
 src/token_mentor/
 ├── context/                    # 1. 上下文工程
-│   └── analysis.py             # README / Markdown / 有界源码扫描、项目画像
+│   ├── analysis.py             # README / Markdown / 有界源码扫描、项目画像
+│   └── task_intent.py          # 统一任务类别和规则回退分类
 ├── tools/                      # 2. 工具系统
-│   └── mcp.py                  # MCP 协议、远程工具调用、结构化结果解析
+│   ├── mcp.py                  # MCP 协议、远程工具调用、结构化结果解析
+│   ├── aliyun_models.py        # 百炼工作空间模型目录 API
+│   ├── tavily.py               # 官方网页/新闻搜索与提取
+│   └── pricing.py              # 报价表解析、币种换算
 ├── orchestration/              # 3. 执行编排
 │   ├── agents.py               # 研究、顾问和测评的调用入口
 │   ├── collector.py            # 多数据源采集、失败隔离与入库流程
+│   ├── decision.py             # 本地 Laya 意图分类和规则回退
 │   ├── service.py              # 画像 → 缓存 → 排序 → 报告
 │   ├── ranking.py              # 确定性排序计算
 │   └── report.py               # 推荐理由、数据库建议、Markdown 组装
@@ -52,11 +57,12 @@ src/token_mentor/
 ```mermaid
 flowchart LR
     P[项目 / 用户意图] --> C[context 项目画像]
-    M[MCP 数据源] --> T[tools 工具适配]
+    M[MCP / Tavily / 百炼目录 API] --> T[tools 工具适配]
     T --> O[orchestration 采集流程]
     O --> S[(state 报价与发现队列)]
     C --> R[orchestration 推荐流程]
     S --> R
+    L[本地 Laya / 规则分类] --> R
     K[constraints 扫描与评分规则] -.-> C
     K -.-> R
     R --> D[Markdown / API]
@@ -74,7 +80,7 @@ SQLite 使用 WAL、busy timeout 和逐次提交/关闭的连接。支持单机 
 
 ## 当前完成和后续实现
 
-已实现：有界项目分析、MCP 适配、采集失败隔离、确定性推荐、共享缓存、反馈、离线测评，以及六层代码边界。
+已实现：有界项目分析、MCP/Tavily 适配、百炼目录 API 适配、任务分类器接口与规则回退、按目录能力标签筛选候选、正式报价确定性排序、共享缓存、反馈、离线测评，以及六层代码边界。百炼和 Laya 需要各自在本机/服务环境提供有效凭据或运行包才可实际请求/推理。
 
 尚未实现：五节点持久状态机、benchmark 同版本证据对齐和运行耗时指标、订阅权益、客户模型配置自动更新。这些不能因为目录存在就称为完成。
 

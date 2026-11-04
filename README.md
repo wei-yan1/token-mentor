@@ -31,8 +31,9 @@ token-mentor recommend --repo . --intent "AI 项目成本与模型选型" --outp
 ## 功能
 
 - `recommend`：优先读取用户指定的项目用途，再读 README、Markdown、Python 和配置文件，生成能力画像、分任务模型排名、估算成本、数据库/缓存建议及 Markdown 报告。
-- `refresh`：按国内/国外/全部范围运行市场巡检；支持结构化报价 MCP 和 Tavily Search API。每天检查厂商报价源、已收录模型和近期新闻。只有结构化、官方域名匹配的报价进入价格表；搜索结果进入待核验线索。默认循环间隔 24 小时。
-- 三个可组合的 Python agent：`MarketResearchAgent`（定时采集）、`ProjectAdvisorAgent`（项目/用途分析与选型）、`EvaluationAgent`（本地测评）。推荐决策当前是确定性、可审计规则；不依赖隐藏的 LLM 判断。
+- `refresh`：按国内/国外/全部范围运行市场巡检；支持结构化报价 MCP、Tavily Search 与 Extract。每天核验官方定价页、已收录模型和近期新闻；符合明确表格格式的官方报价自动进入价格表，其他搜索结果进入待核验线索。默认循环间隔 24 小时。
+- 阿里云百炼 `GET /api/v1/models` 结构化同步当前工作空间可用模型、能力标签、模态、上下文和部署方式；目录返回的价格不会写入正式报价表。官方目录与定价页分别维护。
+- 三个可组合的 Python agent：`MarketResearchAgent`（定时采集）、`ProjectAdvisorAgent`（项目/用途分析与选型）、`EvaluationAgent`（本地测评）。`ProjectAdvisorAgent` 可用本地 Laya 分类任务，再按目录能力标签筛选候选，最后用可核验报价及现有评分规则排序；缺少 `laya.load` 时自动回退到规则分类。
 - `import-prices`：导入手工核验或其他 MCP/ETL 整理的标准价格快照。
 - `api`：可选 FastAPI 多用户服务；项目描述通过 API 提交，不允许客户端指定服务端文件路径。推荐结果由共享 SQLite 缓存复用。
 - `feedback` / `feedback-list`：保存并复盘 1–5 分和原因；`eval`：运行自建的小型意图识别/排序测评集。
@@ -104,7 +105,18 @@ token-mentor api --host 127.0.0.1 --port 8080
 
 ## 阿里云单机部署
 
-提供 `Dockerfile` 和 `docker-compose.yml` 作为单机 ECS/容器的起点。创建本地 `config/sources.json` 并准备环境变量后，在单机上运行 API 和定时采集容器，共享持久化数据卷。服务/API、采集循环及调度器分离；采集任务可按需用容器重启策略监督。
+提供 `Dockerfile` 和 `docker-compose.yml` 作为单机 ECS/容器的起点。每日采集器是默认服务；API 放在可选的 `api` profile 中，因此仅启用价格更新时不需要配置 API 密钥。两者共享持久化数据卷。
+
+```powershell
+Copy-Item .env.example .env
+# 在 .env 中填写 TAVILY_API_KEY；config/sources.json 需包含已核验的官方定价页。
+docker compose up -d collector
+docker compose logs -f collector
+```
+
+采集容器启动后立即执行一轮，之后每 24 小时执行。检查数据库是否收到正式报价，可在主机运行 `token-mentor market-checks --limit 20` 和 `token-mentor recommend --repo . --intent "你的项目用途"`。只有官方页面抽取到可识别价格时，检查状态才会是 `verified` 并更新正式价格表；`search_only` 表示本轮搜到了线索但没有解析出正式报价，可查看采集器日志定位该厂商页面。
+
+需要同时开放推荐 API 时，在 `.env` 设置至少 32 个字符的 `TOKEN_MENTOR_API_KEY`，然后运行 `docker compose --profile api up -d api`。API 默认仅绑定 `127.0.0.1`。
 
 这个 MVP 使用 SQLite，适合单机 API/采集进程和多用户共享结果缓存。它不是跨多节点高可用数据层；若需多副本横向扩展，需把 `Catalog` 仓储替换为阿里云 RDS PostgreSQL，并通过对象存储或数据库备份保留快照。未在本仓库中伪称 SQLite 已支持多节点部署。
 
@@ -129,16 +141,18 @@ python -m compileall -q src
 
 ## 国内外市场巡检
 
-配置文件中维护厂商和官方域名列表，当前示例覆盖国内与海外常见厂商，并把“牛来 / Ox Alpha”作为新闻热词搜索，不预设其厂商归属。可用 `refresh --scope domestic`、`--scope foreign` 或 `--scope all` 控制范围。Tavily 每轮按厂商搜官方价格/模型更新和新闻；也会逐条核验已入库模型。每次 refresh 对结构化价格源、厂商搜索、逐模型核验和新闻搜索共享硬上限 100 次外部请求；模型核验按厂商轮转，按最近核验时间优先。单厂商模型选择上限默认 100，但不会突破本轮总预算。
+配置文件中维护厂商和官方域名列表，当前示例覆盖国内与海外常见厂商，并把“牛来 / Ox Alpha”作为新闻热词搜索，不预设其厂商归属。可用 `refresh --scope domestic`、`--scope foreign` 或 `--scope all` 控制范围。百炼结构化目录按页同步工作空间可用模型及能力；Tavily 按厂商搜索通用价格、向量、多模态、语音、重排、3D 和自部署模型的官方资料及新闻；也会逐条核验已入库模型。每次 refresh 对结构化目录/报价、厂商搜索、逐模型核验、页面提取和新闻搜索共享硬上限 100 次外部请求；模型核验按厂商轮转，按最近核验时间优先。
 
 ```powershell
 Copy-Item config/sources.example.json config/sources.json
 Copy-Item .env.example .env
-# 在 .env 里填 TAVILY_API_KEY；在 sources.json 里配置你实际可用的官方价格 MCP endpoint
+# 在 .env 里填 TAVILY_API_KEY；sources.json 已含可用的官方定价页 URL，也可继续添加结构化价格 MCP
 token-mentor refresh --config config/sources.json --scope all --loop --interval-seconds 86400
 token-mentor market-leads --scope domestic
 token-mentor market-checks
 token-mentor price-changes
 ```
 
-Tavily 搜索的结果、模型描述摘要和新闻会标为待核验；仅官方价格 MCP 返回且来源域名匹配的结构化报价会更新价格表。未配置价格 MCP 的海外厂商目前先收集官方页面/新闻线索，不会从网页摘要猜出美元价格。详细状态定义见 [市场巡检](docs/market-research.md)。
+Tavily 搜索的新闻、价格线索和模型描述摘要会保留在待核验库；价格页面正文只有在含有明确的“每百万 token”单位、模型/输入/输出价格和可识别币种时才自动解析为报价，且必须来自该厂商配置的官方域名。已确认的定价页 URL 会直接提取，减少搜索结果变化造成的漏收。外币会按 Frankfurter/ECB 日汇率换算成人民币，同时保存原币价格、汇率、日期和汇率来源；无法消歧或不支持的页面仍只作为待核验线索。百炼目录能力只定义候选适用任务，价格仍由该厂商官方定价页或结构化价格源单独核验。详细状态定义见 [市场巡检](docs/market-research.md)。
+
+百炼目录同步需在 `.env` 设置 `DASHSCOPE_API_KEY` 和 `DASHSCOPE_WORKSPACE_ID`，并按工作空间地域调整 `config/sources.json` endpoint。Laya 按本地 Python 环境的 `import laya` / `laya.load` 接口惰性加载，可通过 `TOKEN_MENTOR_DECISION_BACKEND=laya|laya_shadow|rule` 选择模式，模型与设备分别由 `TOKEN_MENTOR_LAYA_MODEL`、`TOKEN_MENTOR_LAYA_DEVICE` 配置。本项目不下载未知来源的 Laya 包或权重；若本机包不可用，分类器回退到规则判断。

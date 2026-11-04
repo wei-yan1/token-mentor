@@ -104,7 +104,7 @@ class Catalog:
                 CREATE TABLE IF NOT EXISTS price_changes (
                     id INTEGER PRIMARY KEY, source_name TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
                     old_input REAL NOT NULL, new_input REAL NOT NULL, old_output REAL NOT NULL, new_output REAL NOT NULL,
-                    source_url TEXT NOT NULL, observed_at TEXT NOT NULL, recorded_at TEXT NOT NULL
+                    source_url TEXT NOT NULL, observed_at TEXT NOT NULL, recorded_at TEXT NOT NULL, currency TEXT NOT NULL DEFAULT 'CNY'
                 );
                 CREATE INDEX IF NOT EXISTS idx_price_changes_time ON price_changes(recorded_at DESC);
                 CREATE TABLE IF NOT EXISTS benchmarks (
@@ -142,6 +142,9 @@ class Catalog:
             lead_columns = {row["name"] for row in db.execute("PRAGMA table_info(market_leads)").fetchall()}
             if "published_at" not in lead_columns:
                 db.execute("ALTER TABLE market_leads ADD COLUMN published_at TEXT")
+            price_change_columns = {row["name"] for row in db.execute("PRAGMA table_info(price_changes)").fetchall()}
+            if "currency" not in price_change_columns:
+                db.execute("ALTER TABLE price_changes ADD COLUMN currency TEXT NOT NULL DEFAULT 'CNY'")
 
     def upsert_quotes(self, quotes: Iterable[ModelQuote]) -> int:
         rows = [
@@ -363,9 +366,10 @@ class Catalog:
 
     def record_price_change(self, source_name: str, change: dict[str, object]) -> None:
         with self._connection() as db:
-            db.execute("INSERT INTO price_changes(source_name,provider,model,old_input,new_input,old_output,new_output,source_url,observed_at,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            db.execute("INSERT INTO price_changes(source_name,provider,model,old_input,new_input,old_output,new_output,source_url,observed_at,recorded_at,currency) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                        (source_name, change["provider"], change["model"], change["old_input"], change["new_input"],
-                        change["old_output"], change["new_output"], change["source_url"], change["observed_at"], utc_now()))
+                        change["old_output"], change["new_output"], change["source_url"], change["observed_at"], utc_now(),
+                        change.get("currency", "CNY")))
 
     def list_price_changes(self, limit: int = 100) -> list[dict[str, object]]:
         with self._connection() as db:

@@ -57,11 +57,11 @@ class McpSourceConfig:
         if not isinstance(enabled, bool):
             raise ValueError(f"{name}: enabled 必须是布尔值")
         transport = str(item.get("transport", "mcp")).strip().lower()
-        if transport not in {"mcp", "tavily"}:
-            raise ValueError(f"{name}: transport 只能是 mcp 或 tavily")
+        if transport not in {"mcp", "tavily", "aliyun_models"}:
+            raise ValueError(f"{name}: transport 只能是 mcp、tavily 或 aliyun_models")
         parsed_endpoint = urlparse(endpoint)
-        if transport == "tavily" and (mode != "discovery" or parsed_endpoint.hostname != "api.tavily.com" or parsed_endpoint.path.rstrip("/") != "/search"):
-            raise ValueError(f"{name}: Tavily transport 必须是 discovery 且 endpoint 为 https://api.tavily.com/search")
+        if transport == "tavily" and (parsed_endpoint.hostname != "api.tavily.com" or parsed_endpoint.path.rstrip("/") != "/search"):
+            raise ValueError(f"{name}: Tavily transport endpoint 必须是 https://api.tavily.com/search")
         local_hosts = {"localhost", "127.0.0.1", "::1"}
         if not parsed_endpoint.hostname:
             raise ValueError(f"{name}: MCP endpoint 必须包含主机名")
@@ -78,7 +78,7 @@ class McpSourceConfig:
         if scope not in {"domestic", "foreign", "all"}:
             raise ValueError(f"{name}: scope 只能是 domestic、foreign 或 all")
         category = str(item.get("category", "pricing" if mode == "pricing" else "news")).strip().lower()
-        if category not in {"pricing", "news", "discovery", "verification"}:
+        if category not in {"pricing", "news", "discovery", "verification", "model_catalog"}:
             raise ValueError(f"{name}: category 无效")
         query_argument = str(item.get("query_argument", "query")).strip()
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", query_argument):
@@ -285,7 +285,11 @@ class McpMarketSource:
         result = self.call(arguments_override)
         rows = _extract_quote_rows(result)
         inherited_region = default_region or (self.config.scope if self.config.scope in {"domestic", "foreign"} else "unknown")
-        quotes = [ModelQuote.from_payload(row, default_provider=self.config.provider, default_region=inherited_region) for row in rows]
+        from token_mentor.tools.pricing import normalize_quote_currency
+
+        normalized_rows = [normalize_quote_currency(row, timeout_seconds=self.config.timeout_seconds) for row in rows]
+        quotes = [ModelQuote.from_payload(row, default_provider=self.config.provider, default_region=inherited_region)
+                  for row in normalized_rows]
         return quotes, rows
 
     def collect(self, arguments_override: dict[str, Any] | None = None) -> list[ModelQuote]:

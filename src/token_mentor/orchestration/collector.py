@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import re
 from string import Formatter
 from typing import Any
 from urllib.parse import urlparse
@@ -13,9 +14,20 @@ from token_mentor.models import ModelProfile, ModelQuote, ResearchTarget
 from token_mentor.constraints.market import MAX_SEARCH_REQUESTS_PER_REFRESH
 from token_mentor.tools.mcp import McpMarketSource, McpSourceConfig
 from token_mentor.tools.tavily import TavilySearchSource
+from token_mentor.tools.aliyun_models import AliyunModelCatalogSource
+from token_mentor.tools.pricing import extract_markdown_quotes, normalize_quotes
 from token_mentor.state.storage import Catalog
 
 SCOPES = {"domestic", "foreign", "all"}
+DEFAULT_MODEL_LANE_TERMS = (
+    "text embedding vector model API pricing",
+    "multimodal vision image video model API pricing",
+    "speech recognition ASR transcription API pricing",
+    "text to speech TTS voice model API pricing",
+    "reranking reranker model API pricing",
+    "3D generation model API pricing",
+    "open weights self hosted inference deployment model",
+)
 
 
 def load_collection_config(path: str | Path) -> tuple[list[McpSourceConfig], list[ResearchTarget]]:
@@ -41,11 +53,18 @@ def load_collection_config(path: str | Path) -> tuple[list[McpSourceConfig], lis
     for row in raw_targets:
         aliases = row.get("aliases", [])
         domains = row.get("official_domains", [])
+        pricing_urls = row.get("pricing_urls", [])
+        model_lanes = row.get("model_lanes", {})
         enabled = row.get("enabled", True)
-        if not isinstance(aliases, list) or not isinstance(domains, list) or not isinstance(enabled, bool):
-            raise ValueError("target aliases/official_domains 必须是数组，enabled 必须是布尔值")
+        if (not isinstance(aliases, list) or not isinstance(domains, list) or
+                not isinstance(pricing_urls, list) or any(not isinstance(url, str) for url in pricing_urls) or
+                not isinstance(model_lanes, dict) or any(not isinstance(value, list) or any(not isinstance(term, str) for term in value) for value in model_lanes.values()) or
+                not isinstance(enabled, bool)):
+            raise ValueError("target aliases/official_domains/pricing_urls 必须是数组，model_lanes 必须是字符串数组映射，enabled 必须是布尔值")
         targets.append(ResearchTarget(provider=str(row.get("provider", "")), region=str(row.get("region", "")),
-                                      aliases=tuple(aliases), official_domains=tuple(domains), enabled=enabled))
+                                      aliases=tuple(aliases), official_domains=tuple(domains), enabled=enabled,
+                                      pricing_urls=tuple(pricing_urls),
+                                      model_lanes={str(key): tuple(value) for key, value in model_lanes.items()}))
     if len({(x.provider.casefold(), x.region) for x in targets}) != len(targets):
         raise ValueError("targets 中 provider + region 不能重复")
     return configs, targets
@@ -73,6 +92,7 @@ def _format_query(template: str, target: ResearchTarget | None, scope: str, mode
               "aliases": " ".join(target.aliases) if target else "",
               "domains": " ".join(f"site:{domain}" for domain in target.official_domains) if target else "",
               "model": model, "watch_terms": " ".join(watch_terms),
+              "task_terms": " ".join(term for terms in (target.model_lanes.values() if target and target.model_lanes else (DEFAULT_MODEL_LANE_TERMS,)) for term in terms),
               "region": target.region if target else scope, "date": now}
     try:
         return template.format_map(values).strip()
@@ -85,6 +105,12 @@ def _official_source(url: str, target: ResearchTarget | None) -> bool:
         return False
     hostname = (urlparse(url).hostname or "").lower()
     return any(hostname == domain or hostname.endswith("." + domain) for domain in target.official_domains)
+
+
+def _native_quote_prices(quote: ModelQuote) -> tuple[str, float, float]:
+    return (quote.source_currency,
+            quote.source_input_price_per_million if quote.source_input_price_per_million is not None else quote.input_price_per_million,
+            quote.source_output_price_per_million if quote.source_output_price_per_million is not None else quote.output_price_per_million)
 
 
 def _profiles_from_rows(rows: list[dict[str, Any]], targets: list[ResearchTarget], observed_at: str, *, default_provider: str | None = None, default_region: str = "unknown") -> list[ModelProfile]:
@@ -113,7 +139,10 @@ def _profiles_from_rows(rows: list[dict[str, Any]], targets: list[ResearchTarget
                                    source_kind="official" if official else "aggregator",
                                    verification_status="verified" if official and not missing_description else "needs_review",
                                    modalities=row.get("modalities", row.get("modalities_supported", ())) or (),
-                                   context_tokens=row.get("context_tokens", row.get("context_length"))))
+                                   context_tokens=row.get("context_tokens", row.get("context_length")),
+                                   task_lanes=tuple(row.get("task_lanes", ())),
+                                   capability_tags=tuple(row.get("capability_tags", row.get("capabilities", ())) or ()),
+                                   features=tuple(row.get("features", ()) or ())))
     return result
 
 
@@ -128,6 +157,8 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
     errors: list[dict[str, str]] = []
     search_queries_attempted = 0
     search_queries_skipped = 0
+    research_requests_attempted = 0
+    extraction_requests_skipped = 0
     news_regions_count = 2 if scope == "all" else 1
     news_reserve_remaining = 0
     for configured_source in configs:
@@ -142,7 +173,9 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
     for config in configs:
         if not config.enabled or not _source_in_scope(config, scope):
             continue
-        source = TavilySearchSource(config) if config.transport == "tavily" else McpMarketSource(config)
+        source = (TavilySearchSource(config) if config.transport == "tavily"
+                  else AliyunModelCatalogSource(config) if config.transport == "aliyun_models"
+                  else McpMarketSource(config))
         if config.mode == "pricing":
             price_targets: list[ResearchTarget | None] = (
                 [target for target in active_targets if config.scope == "all" or config.scope == target.region]
@@ -151,10 +184,11 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
             if not price_targets and config.iterate_targets:
                 continue
             for target in price_targets:
-                if search_queries_attempted >= MAX_SEARCH_REQUESTS_PER_REFRESH - news_reserve_remaining:
+                if research_requests_attempted >= MAX_SEARCH_REQUESTS_PER_REFRESH - news_reserve_remaining:
                     search_queries_skipped += 1
                     continue
                 search_queries_attempted += 1
+                research_requests_attempted += 1
                 try:
                     override: dict[str, Any] = {}
                     if target:
@@ -180,12 +214,12 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
                     price_changes = []
                     for item in observed:
                         previous = latest_before.get((item.provider, item.model))
-                        if previous and (previous.input_price_per_million != item.input_price_per_million or
-                                         previous.output_price_per_million != item.output_price_per_million or
+                        if previous and (_native_quote_prices(previous) != _native_quote_prices(item) or
                                          previous.cached_input_price_per_million != item.cached_input_price_per_million):
                             price_changes.append({"provider": item.provider, "model": item.model,
-                                                  "old_input": previous.input_price_per_million, "new_input": item.input_price_per_million,
-                                                  "old_output": previous.output_price_per_million, "new_output": item.output_price_per_million,
+                                                  "old_input": _native_quote_prices(previous)[1], "new_input": _native_quote_prices(item)[1],
+                                                  "old_output": _native_quote_prices(previous)[2], "new_output": _native_quote_prices(item)[2],
+                                                  "currency": _native_quote_prices(item)[0],
                                                   "source_url": item.source_url, "observed_at": item.observed_at})
                     changed = catalog.upsert_quotes(observed)
                     for change in price_changes: catalog.record_price_change(config.name, change)
@@ -219,7 +253,9 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
             for news_region in news_regions:
                 jobs.append((category, None, _format_query(templates[category], None, news_region, watch_terms=config.watch_terms), None))
 
-        if templates and active_targets:
+        if config.category == "model_catalog" and config.transport == "aliyun_models":
+            jobs.append(("model_catalog", None, "", None))
+        elif templates and active_targets:
             for category, template in templates.items():
                 if category in {"market_news", "news", "model_verification"}:
                     continue
@@ -260,21 +296,113 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
         for category, target, query, model_name in jobs:
             is_news_query = category in {"market_news", "news"}
             available_limit = MAX_SEARCH_REQUESTS_PER_REFRESH if is_news_query else MAX_SEARCH_REQUESTS_PER_REFRESH - news_reserve_remaining
-            if search_queries_attempted >= available_limit:
+            request_reservation = max(1, int(getattr(source, "max_request_count", 1)))
+            if research_requests_attempted + request_reservation > available_limit:
                 search_queries_skipped += 1
                 continue
             search_queries_attempted += 1
+            research_requests_attempted += request_reservation
             if is_news_query and news_reserve_remaining:
                 news_reserve_remaining -= 1
             try:
                 override = {config.query_argument: query} if query else None
                 if config.transport == "tavily":
                     override = {**(override or {}), "topic": "news" if category == "market_news" else "general"}
+                    if category in {"pricing", "task_pricing", "model_verification"}:
+                        override["include_raw_content"] = True
                     if category == "market_news": override["time_range"] = "week"
                     elif category == "model_news": override["time_range"] = "month"
-                    if target and category in {"pricing", "provider_research", "model_news", "model_verification"} and target.official_domains:
+                    if target and category in {"pricing", "task_pricing", "provider_research", "model_news", "model_verification"} and target.official_domains:
                         override["include_domains"] = list(target.official_domains)
                 found = source.discover(override)
+                actual_requests = int(getattr(source, "last_request_count", request_reservation))
+                research_requests_attempted += actual_requests - request_reservation
+                extracted_quotes: list[ModelQuote] = []
+                pricing_error: str | None = None
+                latest_before: dict[tuple[str, str], ModelQuote] = {}
+                if config.transport == "tavily" and category in {"pricing", "task_pricing", "model_verification"} and target:
+                    candidates: list[dict[str, Any]] = []
+                    for item in found:
+                        if not _official_source(str(item.get("url", "")), target):
+                            continue
+                        page_content = item.get("raw_content") or item.get("snippet", "")
+                        candidates.extend(extract_markdown_quotes(
+                            page_content,
+                            provider=target.provider,
+                            source_url=str(item.get("url", "")),
+                            region=target.region,
+                        ))
+                    if not candidates:
+                        extract_urls = list(target.pricing_urls) if category == "pricing" else []
+                    else:
+                        extract_urls = []
+                    if ((category == "task_pricing" or (category == "pricing" and not target.pricing_urls))
+                            and not candidates):
+                        extract_urls = [str(item.get("url", "")) for item in found
+                            if _official_source(str(item.get("url", "")), target)
+                            and re.search(r"pricing|price|billing|model-pricing|embedding|speech|audio|video|rerank|计费|价格|语音|向量|多模态|视频", f"{item.get('title', '')} {item.get('url', '')}", re.I)]
+                        if category == "task_pricing":
+                            configured = {url.casefold() for url in target.pricing_urls}
+                            extract_urls = [url for url in extract_urls if url.casefold() not in configured]
+                    extract_urls = list(dict.fromkeys(url for url in extract_urls if _official_source(url, target)))
+                    if extract_urls and research_requests_attempted < MAX_SEARCH_REQUESTS_PER_REFRESH - news_reserve_remaining:
+                        research_requests_attempted += 1
+                        try:
+                            extracted_pages = source.extract_pages(extract_urls[:3])
+                            for page in extracted_pages:
+                                candidates.extend(extract_markdown_quotes(page["raw_content"],
+                                    provider=target.provider, source_url=page["url"], region=target.region))
+                        except Exception as exc:
+                            pricing_error = f"官方价格页提取失败：{str(exc)[:300]}"
+                    elif extract_urls:
+                        extraction_requests_skipped += 1
+                    if category == "model_verification" and model_name:
+                        candidates = [row for row in candidates
+                                      if str(row.get("model", "")).casefold() == model_name.casefold()]
+                    try:
+                        extracted_quotes = normalize_quotes(candidates, timeout_seconds=config.timeout_seconds) if candidates else []
+                        if found and not candidates:
+                            pricing_error = pricing_error or "官方搜索结果未包含可识别的每百万 token 模型价格表"
+                    except Exception as exc:
+                        pricing_error = str(exc)[:500]
+                    if extracted_quotes:
+                        latest_before = {(item.provider, item.model): item for item in catalog.latest_quotes()}
+                        price_changes = []
+                        for item in extracted_quotes:
+                            if not _official_source(item.source_url, target):
+                                continue
+                            previous = latest_before.get((item.provider, item.model))
+                            if previous and (_native_quote_prices(previous) != _native_quote_prices(item) or
+                                             previous.cached_input_price_per_million != item.cached_input_price_per_million):
+                                price_changes.append({"provider": item.provider, "model": item.model,
+                                    "old_input": _native_quote_prices(previous)[1], "new_input": _native_quote_prices(item)[1],
+                                    "old_output": _native_quote_prices(previous)[2], "new_output": _native_quote_prices(item)[2],
+                                    "currency": _native_quote_prices(item)[0],
+                                    "source_url": item.source_url, "observed_at": item.observed_at})
+                        extracted_quotes = [item for item in extracted_quotes if _official_source(item.source_url, target)]
+                        changed_quotes = catalog.upsert_quotes(extracted_quotes)
+                        for change in price_changes:
+                            catalog.record_price_change(config.name, change)
+                        quote_total += len(extracted_quotes)
+                        changed_total += changed_quotes
+                        price_change_total += len(price_changes)
+                if category == "model_catalog":
+                    profiles = [ModelProfile(
+                        provider=str(row["provider"]), model=str(row["model"]), region=str(row.get("region", "domestic")),
+                        description=str(row.get("description", "")), strengths=tuple(row.get("strengths", ())),
+                        source_url=str(row["source_url"]), observed_at=str(row["observed_at"]),
+                        source_kind="official", verification_status="verified",
+                        modalities=tuple(row.get("modalities", ())), context_tokens=row.get("context_tokens"),
+                        task_lanes=tuple(row.get("task_lanes", ())), capability_tags=tuple(row.get("capability_tags", ())),
+                        features=tuple(row.get("features", ())),
+                    ) for row in found]
+                    profile_count = catalog.upsert_model_profiles(profiles)
+                    profiles_total += profile_count
+                    catalog.record_market_check(config.name, "domestic", status="verified" if profile_count else "no_results",
+                                                profile_count=profile_count, lead_count=0)
+                    successes.append({"source": config.name, "category": category, "profiles": profile_count,
+                                      "requests": actual_requests})
+                    continue
                 annotated = []
                 for item in found:
                     annotated.append({**item, "provider": target.provider if target else item.get("provider", ""),
@@ -302,12 +430,20 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
                                 verification_status="needs_review"))
                 profile_count = catalog.upsert_model_profiles(profiles)
                 profiles_total += profile_count
-                check_status = "search_only" if category in {"pricing", "verification", "model_verification"} and count else "found" if count else "no_results"
+                check_status = ("verified" if extracted_quotes else "search_only") if category in {"pricing", "task_pricing", "verification", "model_verification"} and count else "found" if count else "no_results"
                 catalog.record_market_check(config.name, lead_scope, target_provider=target.provider if target else None,
-                                            target_model=model_name, status=check_status, profile_count=profile_count, lead_count=count)
+                                            target_model=model_name, status=check_status, quote_count=len(extracted_quotes),
+                                            profile_count=profile_count, lead_count=count,
+                                            changed_count=sum(1 for item in extracted_quotes
+                                                              if (item.provider, item.model) in latest_before and
+                                                              (_native_quote_prices(latest_before[(item.provider, item.model)]) != _native_quote_prices(item))),
+                                            error=pricing_error)
                 successes.append({"source": config.name, "category": category, "scope": target.region if target else scope,
-                                  "target": target.provider if target else None, "leads": count, "profiles": profile_count})
+                                  "target": target.provider if target else None, "leads": count, "quotes": len(extracted_quotes),
+                                  "profiles": profile_count, "pricing_error": pricing_error})
             except Exception as exc:
+                actual_requests = int(getattr(source, "last_request_count", request_reservation))
+                research_requests_attempted += actual_requests - request_reservation
                 message = str(exc)
                 if config.api_key_env and os.environ.get(config.api_key_env):
                     message = message.replace(os.environ[config.api_key_env], "[REDACTED]")
@@ -322,10 +458,10 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
             "search_budget": MAX_SEARCH_REQUESTS_PER_REFRESH,
             "search_queries_attempted": search_queries_attempted,
             "search_queries_skipped": search_queries_skipped,
-            "research_requests_attempted": search_queries_attempted,
-            "research_requests_skipped": search_queries_skipped,
-            "research_request_budget_remaining": MAX_SEARCH_REQUESTS_PER_REFRESH - search_queries_attempted,
-            "search_budget_remaining": MAX_SEARCH_REQUESTS_PER_REFRESH - search_queries_attempted,
+            "research_requests_attempted": research_requests_attempted,
+            "research_requests_skipped": search_queries_skipped + extraction_requests_skipped,
+            "research_request_budget_remaining": MAX_SEARCH_REQUESTS_PER_REFRESH - research_requests_attempted,
+            "search_budget_remaining": MAX_SEARCH_REQUESTS_PER_REFRESH - research_requests_attempted,
             "discoveries_received": discovery_total, "news_leads_received": news_total,
             "sources_ok": successes, "sources_failed": errors, "pruned_quotes": pruned[0]}
 
