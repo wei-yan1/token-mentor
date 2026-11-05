@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#667eea"><meta name="description" content="从项目用途出发，结合模型能力与成本，为每个任务选择合适的大模型。"><title>Token Mentor · 为每个任务，用对模型</title><link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/styles.css"><script type="module" src="/assets/landing.js"></script></head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+<header class="site-header container">
+  <a class="brand" href="/" aria-label="Token Mentor 首页"><span class="brand-mark" data-icon="brand"></span><span class="brand-name">Token<span>Mentor</span></span></a>
+  <nav class="site-nav" aria-label="主导航"><a href="#features">产品能力</a><a href="#workflow">工作方式</a><a href="#privacy">数据边界</a></nav>
+  <div class="header-actions"><a href="/login">登录</a><a class="button small header-cta" href="/app">进入控制台 <span data-icon="arrow-up-right"></span></a></div>
+</header>
+<main id="main" class="container">
+  <section class="hero" aria-labelledby="hero-title">
+    <p class="hero-note"><span class="status-dot"></span> 从项目出发，而不只看模型排行榜</p>
+    <h1 id="hero-title">让每个任务，<span>用对一个模型。</span></h1>
+    <p class="lede">读懂你的项目用途，权衡能力、成本与速度。<br>把模型选择变成一份有依据、能落地的建议。</p>
+    <div class="hero-actions"><a class="button primary" href="/login?mode=register">开始为项目选型 <span data-icon="arrow-up-right"></span></a><a class="button" href="#workflow"><span data-icon="play"></span> 看看如何工作</a></div>
+    <p class="hero-footnote">支持本地任务画像 · 按次使用 · 项目独立管理</p>
+  </section>
+  <section class="features" id="features" aria-labelledby="feature-title">
+    <div class="section-top"><h2 id="feature-title">把选型的每一步，连起来。</h2><p>从任务判断，到项目真正用上。</p></div>
+    <div class="feature-grid">
+      <a class="glass feature-card" href="/app#recommend"><span class="feature-icon" data-icon="scan"></span><span class="card-link" data-icon="arrow-up-right"></span><h3>先读懂你的项目</h3><p>本地分析 README 与代码，也可以直接描述需求。从真实用途出发，判断项目需要什么能力。</p></a>
+      <a class="glass feature-card" href="/app#recommend"><span class="feature-icon" data-icon="sparkles"></span><span class="card-link" data-icon="arrow-up-right"></span><h3>为任务匹配模型</h3><p>文本、向量、语音与多模态任务，分别选择。不同工作，用适合的模型完成。</p></a>
+      <a class="glass feature-card" href="/app#recommend"><span class="feature-icon" data-icon="sliders"></span><span class="card-link" data-icon="arrow-up-right"></span><h3>让成本有据可算</h3><p>结合输入输出用量，权衡能力与价格。生成可下载的推荐报告，说明选择的理由。</p></a>
+      <a class="glass feature-card" href="/app#projects"><span class="feature-icon" data-icon="layers"></span><span class="card-link" data-icon="arrow-up-right"></span><h3>每个项目，独立接入</h3><p>在同一账户管理多个项目，为项目签发独立 API Key。用途、权限与调用归属保持清晰。</p></a>
+      <a class="glass feature-card" href="/app#billing"><span class="feature-icon" data-icon="wallet"></span><span class="card-link" data-icon="arrow-up-right"></span><h3>用多少，算多少</h3><p>通过支付宝购买推荐次数，成功生成报告再扣次。重试不重复收费，用量随时可查。</p></a>
+      <a class="glass feature-card" href="#privacy"><span class="feature-icon" data-icon="shield"></span><span class="card-link" data-icon="arrow-up-right"></span><h3>项目内容，由你决定</h3><p>敏感项目仅提交本地任务画像。需要云端判断时主动授权，对话只保留短期压缩记忆。</p></a>
+    </div>
+  </section>
+  <section id="workflow" class="workflow" aria-labelledby="workflow-title"><div class="workflow-copy"><h2 id="workflow-title">从一个需求，<br>到一份可执行的选择。</h2><p>你不需要先研究所有模型。告诉我们任务和约束，剩下的交给选型流程。</p></div><div class="workflow-list">
+    <div class="workflow-step"><span class="step-number">1</span><div><h3>建立项目，描述任务</h3><p>填写用途，或上传仅包含任务类别与技术栈的本地画像。</p></div></div>
+    <div class="workflow-step"><span class="step-number">2</span><div><h3>设定你在意的取舍</h3><p>选择成本、质量、稳定性与速度的权重，补充预期用量。</p></div></div>
+    <div class="workflow-step"><span class="step-number">3</span><div><h3>拿到推荐与选择理由</h3><p>查看结果并下载 Markdown，供团队评审或项目接入参考。</p></div></div>
+  </div></section>
+  <section id="privacy" class="glass privacy-band" aria-labelledby="privacy-title"><div><h3 id="privacy-title"><span data-icon="shield"></span> 让项目的边界，由你掌握</h3><p>本地分析不上传源码。云端分析需显式授权；报价与推荐缓存保存在服务端私有数据库，客户只获得自己的推荐结果。</p></div><a class="button" href="/login">进入你的工作台</a></section>
+</main>
+<footer class="container site-footer"><p>Token Mentor · 认真对待每一次模型选择</p><nav aria-label="页脚"><a href="#privacy">数据边界</a><a href="/login">账户登录</a><span>为真实项目而构建</span></nav></footer>
+</body></html>

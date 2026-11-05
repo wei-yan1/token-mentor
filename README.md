@@ -89,6 +89,16 @@ token-mentor api [--host 127.0.0.1] [--port 8080]
 
 ## HTTP 服务
 
+短期对话记忆：`POST /v1/recommend` 同时传入 `user_id` 和 `session_id` 即启用；省略则独立处理。
+每轮使用“上轮摘要 + 本轮要求”生成推荐，再以规则抽取压缩成最多 2000 字符的摘要，覆盖旧摘要；不另存完整聊天流水，不调用 LLM 做语义总结。
+摘要保留当前要求与上一轮答复中的任务/首选模型要点，闲置 30 分钟后失效，下次访问记忆库时清除过期摘要。近期上下文会逐轮压缩丢弃，仅作为短期辅助，不保证保留每条历史约束。
+调用 `DELETE /v1/conversations/{user_id}/{session_id}` 可清空会话摘要。会话使用的推荐缓存有效期也限制为最多 30 分钟。
+现有 API 使用共享服务密钥，`user_id` 是可信接入端提供的隔离标识，并非独立用户鉴权；应由接入端绑定真实用户与会话。
+
+```json
+{"user_id":"alice","session_id":"project-a","intent":"再便宜一点","tasks":["speech_recognition"]}
+```
+
 ```powershell
 python -m pip install -e ".[api]"
 $env:TOKEN_MENTOR_API_KEY = python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -121,6 +131,23 @@ docker compose logs -f collector
 这个 MVP 使用 SQLite，适合单机 API/采集进程和多用户共享结果缓存。它不是跨多节点高可用数据层；若需多副本横向扩展，需把 `Catalog` 仓储替换为阿里云 RDS PostgreSQL，并通过对象存储或数据库备份保留快照。未在本仓库中伪称 SQLite 已支持多节点部署。
 
 ## 测评与改进
+
+### 本地项目模型配置更新（简版）
+
+使用独立 JSON 配置，例如 `{"provider":"厂商名","model":"当前模型ID","temperature":0.3}`。
+命令中的 `my-project` 是你自己的项目 ID，`VERSION_ID` 是 propose 返回的版本 ID：
+
+```powershell
+token-mentor project-model register my-project --file model-config.json --task coding
+token-mentor project-model propose my-project
+token-mentor project-model status VERSION_ID
+token-mentor project-model apply VERSION_ID
+token-mentor project-model rollback VERSION_ID
+```
+
+登记配置路径及任务后，生成前后配置、报价快照及每次请求的成本差异。只有近 30 天内的报价、同任务已有能力评分不降、输入输出单价均不升且至少一项下降时才建议替换；无评分则拒绝推断。这里的评分是已导入的数据，需维护者保证可比较，不代表系统进行了真实模型测评。估算使用 4000 输入、1200 输出 token。
+
+应用会检查原配置及报价快照是否变化，通过后原子替换 JSON 文件；额外字段保留。SQLite 保存版本与执行状态，进程重启后可查询、继续中断操作或回滚；外部改动不会被直接覆盖。此版本校验配置结构和报价，不进行真实 API 质量测试，不迁移厂商密钥/endpoint，也不会自动重启业务服务。仅用于本地配置文件，自动定时应用、订阅权益及业务健康检查仍待实现。
 
 编辑 `evals/cases.json`，加入业务常见意图、预期任务类别、可核验报价样本和预期首选模型，再执行 `token-mentor eval`。当前测评覆盖任务识别与推荐排序，不会调用真实模型生成回答；生成质量、延迟和稳定性应通过你自己的模型 API 测评器/线上观测导入。反馈用于复盘，人工据此调整任务映射、测评集和权重；当前不会根据单条评分静默改写规则或自动训练模型。
 
@@ -156,3 +183,24 @@ token-mentor price-changes
 Tavily 搜索的新闻、价格线索和模型描述摘要会保留在待核验库；价格页面正文只有在含有明确的“每百万 token”单位、模型/输入/输出价格和可识别币种时才自动解析为报价，且必须来自该厂商配置的官方域名。已确认的定价页 URL 会直接提取，减少搜索结果变化造成的漏收。外币会按 Frankfurter/ECB 日汇率换算成人民币，同时保存原币价格、汇率、日期和汇率来源；无法消歧或不支持的页面仍只作为待核验线索。百炼目录能力只定义候选适用任务，价格仍由该厂商官方定价页或结构化价格源单独核验。详细状态定义见 [市场巡检](docs/market-research.md)。
 
 百炼目录同步需在 `.env` 设置 `DASHSCOPE_API_KEY` 和 `DASHSCOPE_WORKSPACE_ID`，并按工作空间地域调整 `config/sources.json` endpoint。Laya 按本地 Python 环境的 `import laya` / `laya.load` 接口惰性加载，可通过 `TOKEN_MENTOR_DECISION_BACKEND=laya|laya_shadow|rule` 选择模式，模型与设备分别由 `TOKEN_MENTOR_LAYA_MODEL`、`TOKEN_MENTOR_LAYA_DEVICE` 配置。本项目不下载未知来源的 Laya 包或权重；若本机包不可用，分类器回退到规则判断。
+
+
+### 私有缓存与本地项目分析
+
+服务端 SQLite 保存模型目录、报价和推荐缓存；客户不获得数据库或全量目录访问。内部目录、市场巡检和工作流详情改用独立的 `TOKEN_MENTOR_OPERATOR_KEY`；不设置即禁止访问。
+
+敏感项目运行 `token-mentor profile --repo .`，仅输出任务类别和技术栈，再调用 `/v1/recommend/profile`。愿意将用途描述交给服务判断时，调用 `/v1/recommend` 并显式设置 `allow_project_content: true`。会话可传 `user_id` / `session_id`，摘要按上下轮压缩，默认保存 30 分钟。详见 [API 合约](docs/api.md)。
+
+
+### 客户项目与按次收费
+
+已提供独立客户/项目 Key、次数包订单、原子扣次账本及支付宝扫码支付适配。默认关闭共享密钥免计费通道；客户每次成功生成推荐或比较报告扣 1 次，失败退回，幂等重试不重复收费。示例价格为 10 元 / 10 次，可通过服务端配置调整。
+
+支付宝使用官方 Python SDK、RSA2 验签及幂等充值；默认沙箱。需要自行配置对应应用、商户、密钥文件和公网 HTTPS 回调，真实支付未在本仓库环境完成验证。安装 `.[api,payments]`，按 [计费与接入文档](docs/billing.md) 完成开户、建项目、购买和调用。当前无入站 MCP Server 或自动续费；客户登录与工作台已实现。
+
+
+### 网页工作台
+
+启动 API 后打开 `http://127.0.0.1:8080/`，即可使用紫蓝渐变玻璃卡片产品页、登录/注册页和项目工作台。支持账号密码与 QQ 邮箱验证码认证；API Key 仅用于程序调用服务，不能用于网页登录。登录后可以创建独立项目 API Key，并使用模型推荐、Markdown 下载、评价、密钥管理及支付宝充值。新注册账户从零次数开始，页面不展示内部模型和报价缓存。QQ SMTP 配置见 [网页部署与验收](docs/web.md)。
+
+网页和 API 在同一服务内提供，无需单独运行前端构建。详见 [网页部署与验收](docs/web.md)。

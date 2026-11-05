@@ -44,7 +44,7 @@ CAPABILITY_LANES = {
 
 
 def _rows(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], int | None]:
-    data: Any = payload.get("data", payload)
+    data: Any = payload.get("output", payload.get("data", payload))
     if isinstance(data, dict):
         rows = next((data[key] for key in ("models", "items", "results", "list") if isinstance(data.get(key), list)), [])
         total = data.get("total", data.get("total_count"))
@@ -80,9 +80,11 @@ def normalize_model(row: dict[str, Any], *, observed_at: str) -> dict[str, Any] 
     supports = _strings(row.get("supports", []))
     if any("deploy" in value.casefold() or "self" in value.casefold() for value in (*deployment, *supports)):
         lanes = tuple(dict.fromkeys((*lanes, "self_hosted")))
-    context_window = row.get("context_window", row.get("context_length"))
+    context_window = row.get("context_window", row.get("context_length", (row.get("model_info") or {}).get("context_window")))
     try:
         context_tokens = int(context_window) if context_window is not None else None
+        if context_tokens is not None and context_tokens <= 0:
+            context_tokens = None
     except (ValueError, TypeError):
         context_tokens = None
     description = str(row.get("description", row.get("model_description", ""))).strip()
@@ -96,6 +98,7 @@ def normalize_model(row: dict[str, Any], *, observed_at: str) -> dict[str, Any] 
         "modalities": capabilities,
         "capability_tags": capabilities,
         "features": features,
+        "price_details": row.get("prices", []),
         "task_lanes": lanes,
         "context_tokens": context_tokens,
         "source_url": MODEL_CATALOG_DOC,
@@ -130,7 +133,10 @@ class AliyunModelCatalogSource:
         arguments.pop("max_pages", None)
         arguments.update({"page_no": page_no, "page_size": page_size})
         url = f"{endpoint}?{urlencode(arguments, doseq=True)}"
-        request = Request(url, headers={"Accept": "application/json", "Authorization": f"Bearer {token}"})
+        headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+        if workspace:
+            headers["WorkspaceId"] = workspace
+        request = Request(url, headers=headers)
         try:
             with urlopen(request, timeout=self.config.timeout_seconds) as response:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)

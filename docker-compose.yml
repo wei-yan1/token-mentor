@@ -5,11 +5,27 @@ services:
     restart: unless-stopped
     environment:
       TOKEN_MENTOR_API_KEY: ${TOKEN_MENTOR_API_KEY:-}
+      TOKEN_MENTOR_OPERATOR_KEY: ${TOKEN_MENTOR_OPERATOR_KEY:-}
+      TOKEN_MENTOR_ALLOW_LEGACY_KEY: "false"
+      TOKEN_MENTOR_COOKIE_SECURE: ${TOKEN_MENTOR_COOKIE_SECURE:-false}
+      TOKEN_MENTOR_SMTP_HOST: ${TOKEN_MENTOR_SMTP_HOST:-smtp.qq.com}
+      TOKEN_MENTOR_SMTP_PORT: ${TOKEN_MENTOR_SMTP_PORT:-465}
+      TOKEN_MENTOR_SMTP_USERNAME: ${TOKEN_MENTOR_SMTP_USERNAME:-}
+      TOKEN_MENTOR_SMTP_PASSWORD: ${TOKEN_MENTOR_SMTP_PASSWORD:-}
+      TOKEN_MENTOR_PACK_AMOUNT_FEN: ${TOKEN_MENTOR_PACK_AMOUNT_FEN:-1000}
+      TOKEN_MENTOR_PACK_CREDITS: ${TOKEN_MENTOR_PACK_CREDITS:-10}
+      ALIPAY_SANDBOX: ${ALIPAY_SANDBOX:-true}
+      ALIPAY_APP_ID: ${ALIPAY_APP_ID:-}
+      ALIPAY_SELLER_ID: ${ALIPAY_SELLER_ID:-}
+      ALIPAY_NOTIFY_URL: ${ALIPAY_NOTIFY_URL:-}
+      ALIPAY_PRIVATE_KEY_FILE: /run/alipay/app-private.pem
+      ALIPAY_PUBLIC_KEY_FILE: /run/alipay/alipay-public.pem
       TOKEN_MENTOR_DB: /data/catalog.sqlite3
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
       - token-mentor-data:/data
+      - ./secrets/alipay:/run/alipay:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
       interval: 30s

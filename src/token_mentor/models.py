@@ -272,6 +272,7 @@ class ModelProfile:
     task_lanes: tuple[str, ...] = ()
     capability_tags: tuple[str, ...] = ()
     features: tuple[str, ...] = ()
+    price_details: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.model.strip():

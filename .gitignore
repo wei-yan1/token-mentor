@@ -8,6 +8,9 @@ __pycache__/
 *.egg-info/
 .token-mentor/
 reports/
+.hallmark/
 config/sources.json
 .env
+secrets/
+build/
 

@@ -317,6 +317,7 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
                 found = source.discover(override)
                 actual_requests = int(getattr(source, "last_request_count", request_reservation))
                 research_requests_attempted += actual_requests - request_reservation
+                request_reservation = actual_requests
                 extracted_quotes: list[ModelQuote] = []
                 pricing_error: str | None = None
                 latest_before: dict[tuple[str, str], ModelQuote] = {}
@@ -395,6 +396,7 @@ def collect_once(catalog: Catalog, configs: list[McpSourceConfig], *, scope: str
                         modalities=tuple(row.get("modalities", ())), context_tokens=row.get("context_tokens"),
                         task_lanes=tuple(row.get("task_lanes", ())), capability_tags=tuple(row.get("capability_tags", ())),
                         features=tuple(row.get("features", ())),
+                        price_details=row.get("price_details", []),
                     ) for row in found]
                     profile_count = catalog.upsert_model_profiles(profiles)
                     profiles_total += profile_count

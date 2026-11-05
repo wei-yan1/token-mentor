@@ -557,14 +557,26 @@ class ApiIntegrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             key = "test-api-key-which-is-at-least-32-characters-long"
-            client = TestClient(create_app(str(Path(tmp) / "catalog.sqlite3"), key))
+            operator = "operator-key-which-is-at-least-32-characters-long"
+            client = TestClient(create_app(str(Path(tmp) / "catalog.sqlite3"), key, operator, allow_legacy_key=True))
             self.assertEqual(client.get("/healthz").status_code, 200)
             unauthenticated = client.post("/v1/recommend", json={"intent": "project"})
             self.assertEqual(unauthenticated.status_code, 401)
+            memory_headers = {"Authorization": f"Bearer {key}"}
+            memory_response = client.post('/v1/recommend', headers=memory_headers,
+                json={'allow_project_content': True, 'intent': '做文本向量化', 'user_id': 'alice', 'session_id': 'one'})
+            self.assertEqual(memory_response.status_code, 200, memory_response.text)
+            followup = client.post('/v1/recommend', headers=memory_headers,
+                json={'allow_project_content': True, 'intent': '再便宜一点', 'user_id': 'alice', 'session_id': 'one'})
+            self.assertEqual(followup.status_code, 200, followup.text)
+            self.assertIn('文本向量化', followup.json()['markdown'])
+            self.assertEqual(client.delete('/v1/conversations/alice/one', headers=memory_headers).status_code, 200)
+            self.assertEqual(client.post('/v1/recommend', headers=memory_headers,
+                json={'allow_project_content': True, 'intent': 'test', 'session_id': 'one'}).status_code, 422)
             response = client.post(
                 "/v1/recommend",
                 headers={"Authorization": f"Bearer {key}"},
-                json={"intent": "中英文本地化翻译", "tasks": ["translation"]},
+                json={"allow_project_content": True, "intent": "中英文本地化翻译", "tasks": ["translation"]},
             )
             self.assertEqual(response.status_code, 200, response.text)
             body = response.json()
@@ -578,12 +590,12 @@ class ApiIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(comparison.status_code, 200, comparison.text)
             run_id = comparison.json()["run_id"]
-            status = client.get(f"/v1/workflows/{run_id}", headers={"Authorization": f"Bearer {key}"})
+            status = client.get(f"/v1/workflows/{run_id}", headers={"Authorization": f"Bearer {operator}"})
             self.assertEqual(status.status_code, 200, status.text)
             self.assertEqual(status.json()["status"], "completed")
-            self.assertEqual(client.get("/v1/market/models", headers={"Authorization": f"Bearer {key}"}).status_code, 200)
-            self.assertEqual(client.get("/v1/market/leads?scope=domestic", headers={"Authorization": f"Bearer {key}"}).status_code, 200)
-            resumed = client.post(f"/v1/workflows/{run_id}/resume", headers={"Authorization": f"Bearer {key}"})
+            self.assertEqual(client.get("/v1/market/models", headers={"Authorization": f"Bearer {operator}"}).status_code, 200)
+            self.assertEqual(client.get("/v1/market/leads?scope=domestic", headers={"Authorization": f"Bearer {operator}"}).status_code, 200)
+            resumed = client.post(f"/v1/workflows/{run_id}/resume", headers={"Authorization": f"Bearer {operator}"})
             self.assertEqual(resumed.status_code, 200, resumed.text)
             feedback = client.post(
                 "/v1/feedback",

@@ -45,6 +45,17 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="token-mentor", description="项目感知的模型价格与选型助手")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    updates = sub.add_parser('project-model', help='登记项目模型、生成替换建议、应用与回滚 JSON 配置')
+    updates.add_argument('action', choices=('register', 'propose', 'status', 'apply', 'rollback'))
+    updates.add_argument('identifier', help='register/propose 用项目 ID，其余用版本 ID')
+    updates.add_argument('--file', help='含 provider/model 的本地 JSON 配置')
+    updates.add_argument('--task', default='general')
+    updates.add_argument('--db', default=DEFAULT_DB)
+
+    profile = sub.add_parser("profile", help="本地分析项目，只输出可提交服务端的任务画像")
+    profile.add_argument("--repo", default=".")
+    profile.add_argument("--intent")
+
     refresh = sub.add_parser("refresh", help="从配置的 MCP 数据源采集报价和新模型线索")
     refresh.add_argument("--config", default="config/sources.json")
     refresh.add_argument("--db", default=DEFAULT_DB)
@@ -230,8 +241,30 @@ def main(argv: list[str] | None = None) -> int:
     _load_env_file()
     args = _parser().parse_args(argv)
     try:
+        if args.command == 'project-model':
+            from token_mentor.orchestration.config_updates import ConfigUpdateService
+            updates = ConfigUpdateService(Catalog(args.db))
+            if args.action == 'register':
+                if not args.file:
+                    raise ValueError('register 需要 --file 指定 JSON 配置')
+                result = updates.register(args.identifier, args.file, args.task)
+            elif args.action == 'propose':
+                result = updates.propose(args.identifier)
+            elif args.action == 'status':
+                result = updates.versions.get(args.identifier)
+            else:
+                result = updates.change(args.identifier, rollback=args.action == 'rollback')
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if args.command == "refresh":
             return _refresh(args)
+        if args.command == "profile":
+            from token_mentor.context.analysis import analyze_project
+            from token_mentor.orchestration.decision import TaskIntentDecisionAgent
+            project = analyze_project(args.repo, intent=args.intent)
+            decision = TaskIntentDecisionAgent().classify(args.intent or project.summary)
+            print(json.dumps({"tasks": list(decision.tasks), "technologies": list(project.technologies)}, ensure_ascii=False, indent=2))
+            return 0
         if args.command == "recommend":
             return _recommend(args)
         if args.command == "import-prices":

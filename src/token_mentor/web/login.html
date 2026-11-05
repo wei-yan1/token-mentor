@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#667eea"><title>登录 · Token Mentor</title><link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/styles.css"><script type="module" src="/assets/auth.js"></script></head>
+<body><a class="skip-link" href="#auth-form">跳到登录表单</a><header class="container site-header"><a class="brand" href="/" aria-label="Token Mentor 首页"><span class="brand-mark" data-icon="brand"></span><span class="brand-name">Token<span>Mentor</span></span></a><a class="button small quiet" href="/"><span data-icon="arrow-left"></span> 返回首页</a></header>
+<main class="container auth-layout">
+  <section class="auth-story"><h1>好的模型选择，<br>从理解你的项目开始。</h1><p>让能力、成本和任务真正对齐。<br>在你的工作台，为每个项目找到合适的下一步。</p>
+    <div class="auth-proof"><span class="feature-icon" data-icon="layers"></span><div><strong>你的项目，各自清晰</strong><p>项目独立接入，账户统一管理</p></div></div>
+    <div class="auth-proof"><span class="feature-icon" data-icon="shield"></span><div><strong>只分享你愿意分享的内容</strong><p>支持本地画像与授权云端分析</p></div></div>
+    <div class="auth-flow"><span>理解任务</span><span data-icon="arrow-right"></span><span>匹配能力</span><span data-icon="arrow-right"></span><span>生成建议</span></div>
+  </section>
+  <section class="glass auth-card" aria-labelledby="auth-title"><h2 id="auth-title">欢迎回来</h2><p class="auth-intro" id="auth-intro">登录，继续你的项目选型。</p>
+    <div class="tabs" role="tablist" aria-label="账户操作"><button type="button" role="tab" id="login-tab" aria-selected="true" data-mode="login">登录</button><button type="button" role="tab" id="register-tab" aria-selected="false" data-mode="register">创建账户</button></div>
+    <p id="auth-error" class="message" role="alert" hidden></p>
+    <form id="auth-form">
+      <div class="field" id="name-field" hidden><label for="name">如何称呼你</label><input id="name" name="name" autocomplete="name" placeholder="你的名字或团队名称" maxlength="128"></div>
+      <div class="field" id="username-field" hidden><label for="username">账号</label><input id="username" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+" placeholder="3–32 位字母、数字或下划线"></div>
+      <div class="field" id="account-field"><label for="account">账号 / 邮箱</label><input id="account" autocomplete="username" maxlength="254" required placeholder="输入账号或已绑定的邮箱"></div>
+      <div class="field" id="email-field" hidden><label for="email">QQ 邮箱</label><input id="email" type="email" autocomplete="email" placeholder="你的QQ邮箱@qq.com" maxlength="254"></div>
+      <div class="field" id="password-field"><label for="password">密码</label><div class="password-wrap"><input id="password" name="password" type="password" autocomplete="current-password" placeholder="输入你的密码" required maxlength="128"><button class="password-toggle" id="password-toggle" type="button" aria-label="显示密码" aria-pressed="false"><span data-icon="eye"></span></button></div><small id="password-hint" hidden>至少 10 个字符</small></div>
+      <div class="field" id="code-field" hidden><label for="email-code">邮箱验证码</label><div class="verification-row"><input id="email-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6 位验证码"><button class="button small" type="button" id="send-code">发送验证码</button></div><small id="code-status" role="status">验证码 10 分钟内有效。</small></div>
+      <button class="button primary wide" id="auth-submit" type="submit">登录工作台 <span data-icon="arrow-right"></span></button>
+    </form>
+    <p class="auth-hint" id="auth-hint">你的项目、推荐与用量，在这里继续。</p>
+    <div class="auth-alternative"><button class="link-button" id="email-mode" type="button">使用 QQ 邮箱验证码登录</button></div>
+  </section>
+</main><footer class="container site-footer"><span>Token Mentor · 让每个任务，用对模型。</span><a href="/#privacy">了解数据边界</a></footer></body></html>

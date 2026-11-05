@@ -12,7 +12,10 @@ license = { text = "Proprietary" }
 dependencies = []
 
 [project.optional-dependencies]
-api = ["fastapi>=0.115,<1", "uvicorn[standard]>=0.30,<1"]
+api = ["fastapi>=0.115,<1", "uvicorn[standard]>=0.30,<1", "qrcode>=8,<9"]
+payments = ["alipay-sdk-python>=3.7,<4"]
+browser = ["playwright>=1.50,<2"]
+
 dev = ["pytest>=8,<9", "ruff>=0.8,<1", "httpx>=0.27,<1"]
 
 [project.scripts]
@@ -20,4 +23,7 @@ token-mentor = "token_mentor.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+token_mentor = ["web/*"]
 
